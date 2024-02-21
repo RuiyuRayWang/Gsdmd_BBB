@@ -1,0 +1,399 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Preprocessing workflow for WT-LPS'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'wt_lps_mo_preprocessing.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+WRITE_CACHE = FALSE  ## Set to TRUE on first run
+READ_CACHE = !WRITE_CACHE
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(SoupX)
+  library(Seurat)
+  library(DoubletFinder)
+  library(scater)
+})
+```
+
+```{r}
+reticulate::use_python("/home/luolab/miniconda3/envs/r-reticulate/bin/python")
+```
+
+```{r}
+if(!dir.exists("../outs/preprocessing")) {dir.create("../outs/preprocessing")}
+```
+
+For knitr to work, steps involving manual operations (i.e. `CellSelector()`) are omitted. Ids for manually selected cells were stashed to and loaded from the `.rda` file located in the `../miscs/` directory.
+
+```{r}
+load("../miscs/wt_lps_ids.rda")
+```
+
+```{r}
+set.seed(42)
+```
+
+# Pre-processing Workflow
+
+## Decontamination
+
+Using `SoupX` for decontamination. Before constructing the soupchannel, precompute Louvain clusters and umap embeddings which will be later used.
+
+```{r}
+filtered_counts.wt_lps <- Read10X("../data/WT-LPS-MO-0614/outs/filtered_feature_bc_matrix/")
+cells <- CreateSeuratObject(counts = filtered_counts.wt_lps, project = "GD_BBB")
+# Standard Seurat Workflow. For conciseness, future runs of the workflow will use verbose = FALSE
+cells <- cells |>
+  NormalizeData() |>
+  FindVariableFeatures() |>
+  ScaleData() |>
+  RunPCA() |>
+  FindNeighbors(dims = 1:50) |>
+  FindClusters() |>
+  RunUMAP(dims = 1:50)
+```
+
+```{r}
+# Load data and estimate soup profile
+sc = load10X("../data/WT-LPS-MO-0614/outs/")
+# Set clusters and DR
+sc = setClusters(sc, cells$RNA_snn_res.0.8)
+sc = setDR(sc, Embeddings(object = cells, reduction = "umap")[colnames(sc$toc), c("UMAP_1","UMAP_2")])
+# Estimate rho
+sc = autoEstCont(sc)
+# Clean the data
+out = adjustCounts(sc, roundToInt = T)  # stochastic, don't forget to set.seed() for reproducibility
+```
+
+```{r}
+if(WRITE_CACHE){
+  DropletUtils::write10xCounts(path = "../data/WT-LPS-MO-0614/outs/strainedCounts.h5", x = out, type = "HDF5", overwrite = TRUE)  ## Save corrected matrix
+}
+```
+
+```{r}
+if(READ_CACHE){out <- Read10X_h5("../data/WT-LPS-MO-0614/outs/strainedCounts.h5")}
+
+cells.decont <- CreateSeuratObject(counts = out, project = "GD_BBB")
+cells.decont <- cells.decont |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:50, verbose = FALSE) |>
+  FindClusters(algorithm = 4, verbose = FALSE) |>
+  RunUMAP(dims = 1:50, verbose = FALSE)
+```
+
+Here, we're dealing with a sample under acute LPS treatment. This will cause the cell to undergo apoptosis and mRNA leakage. Unsuprisingly, we find many putatively 'Soup' droplets from our data. By iterative sub-clustering, we confirm that they correspond to cluster 1,3,4,8,13,26 and 27. These clusters display low level of recovered genes (nFeature_RNA) and high level of mitochondrial RNA species. Here, we filter them out manually.
+
+```{r fig.width=9, fig.height=6}
+((DimPlot(cells.decont, group.by = "seurat_clusters", label = T) + NoLegend()) | DimPlot(cells.decont, cells.highlight = WhichCells(cells.decont, idents = c(1,3,4,8,13,26,27))) + ggtitle("Cells to Remove\n(Putative Empty droplets)") + NoLegend())/
+  (FeaturePlot(cells.decont, features = c("nFeature_RNA","mt-Nd3")))
+```
+
+```{r}
+cells.clean <- subset(
+  cells.decont,
+  idents = c(1,3,4,8,13,26,27),
+  invert = TRUE
+)
+```
+
+## Doublet Removal
+
+We use `DoubletFinder` to remove doublets. We aimed at ~8000 cell recovery during wet experiment. According to 10X, this corresponds to ~0.06 doublet rates, thus we set `percent_est = 0.06`.
+
+```{r}
+PCs = 1:10
+percent_est = 0.06
+pN = 0.25
+```
+
+```{r}
+cells.clean <- cells.clean |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:50, verbose = FALSE) |>
+  FindClusters(verbose = FALSE) |>
+  RunUMAP(dims = 1:50, verbose = FALSE)
+```
+
+```{r}
+suppressed_msg <- capture.output({
+  sweep.res.list_cells <- paramSweep_v3(cells.clean, PCs = PCs, sct = FALSE)
+  sweep.stats_cell <- summarizeSweep(sweep.res.list_cells, GT = FALSE)
+  bcmvn_cell <- find.pK(sweep.stats_cell)
+  pk_cell <- as.numeric(levels(bcmvn_cell[, 2]))[which.max(bcmvn_cell[,5])]
+  homotypic.prop <- modelHomotypic(annotations <- cells.clean@meta.data$seurat_clusters)
+  nExp_poi <- round(percent_est*nrow(cells.clean@meta.data))
+  nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+  cells.clean <- doubletFinder_v3(cells.clean, PCs, pN, pK = pk_cell, nExp = nExp_poi.adj, reuse.pANN = FALSE, sct = FALSE)
+  cells.clean$doubletfinder <- cells.clean@meta.data[grep("DF.",names(cells.clean@meta.data))]
+  # cells.filtered <- subset(cells.clean, subset = doubletfinder != "Doublet")
+})
+```
+
+Beware, sometimes we may encounter over removal! As a visual check, inspect the predicted doublets. We notice that two large clusters corresponding to Microglia/Macrophage (2) and Blood Vessel Cells (12) contain many cells predicted as doublets. We speculate that these predictions might be confounded by LPS induced transcriptional perturbations. Therefore we correct their labels to "Singlets" and retain these cells in the dataset.
+
+```{r}
+p1 <- DimPlot(cells.clean, cells.highlight = WhichCells(cells.clean, expression = doubletfinder == "Doublet")) +
+  scale_color_manual(labels = c("NA","Doublets"), values = c("gray","#CC0033")) +
+  ggtitle("Predicted Doublets") + NoAxes()
+p2 <- DimPlot(cells.clean, group.by = "seurat_clusters", label = T) + NoLegend() + NoAxes()
+p3 <- FeaturePlot(cells.clean, features = "Cx3cr1") + NoAxes()
+p4 <- FeaturePlot(cells.clean, features = "Pecam1") + NoAxes()
+(p1 | p2) / (p3 | p4)
+```
+
+```{r}
+# correct_singlet_ids <- CellSelector(p1)
+Idents(cells.clean) <- "doubletfinder"
+cells.clean <- SetIdent(cells.clean, cells = correct_singlet_ids, value = "Singlet")
+cells.clean$doubletfinder_fixed <- Idents(cells.clean)
+cells.filtered <- subset(cells.clean, subset = doubletfinder_fixed != "Doublet")
+```
+
+## Quality Control
+
+Using `scater` for QC.
+
+```{r}
+Seurat_Obj_Diet <- DietSeurat(cells.filtered)
+cells.sce <- as.SingleCellExperiment(Seurat_Obj_Diet)
+
+## Cell level QC
+per.cell <- perCellQCMetrics(cells.sce, subsets = list(Mito = grep("^mt-", rownames(cells.sce)),
+                                                       Ribo = grep("\\bRp[sl]\\d+[^k]*\\b", rownames(cells.sce))))
+qc.stats <- quickPerCellQC(per.cell, percent_subsets=c("subsets_Mito_percent"))
+colSums(as.matrix(qc.stats))
+
+colData(cells.sce) <- cbind(colData(cells.sce), cbind(per.cell, qc.stats))
+cells.sce.filtered <- cells.sce[,!cells.sce$discard]
+
+## Feature level QC
+keep_feature <- nexprs(cells.sce.filtered, byrow=TRUE) > 0
+## Remove mitochondrial and ribosomal genes which does not contribute to analysis (i.e. cell clustering)
+keep_feature[grep("\\bRp[sl]\\d+[^k]*\\b", rownames(cells.sce))] <- FALSE
+keep_feature[grep("mt-", rownames(cells.sce))] <- FALSE
+cells.sce.filtered <- cells.sce.filtered[keep_feature,]
+dim(cells.sce.filtered)
+
+wt_lps <- as.Seurat(cells.sce.filtered)
+wt_lps$ident <- NULL
+```
+
+```{r}
+wt_lps <- wt_lps |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:50, verbose = FALSE) |>
+  FindClusters(algorithm = 4, verbose = FALSE) |>
+  RunUMAP(dims = 1:50, verbose = FALSE)
+```
+
+Summary plot of some canonical marker genes for typical brain cell types.
+
+```{r}
+obj <- wt_lps
+
+f_to_plot <- c("nFeature_RNA","Cldn5","Kcnj8","Aqp4","Mbp","Pdgfra",
+               "Slc17a7","Slc17a6","Gad2","Cx3cr1","Col1a1",
+               "Gsdmd","Casp4","Cd14")
+obj <- ScaleData(obj, features = c(VariableFeatures(obj), f_to_plot))
+f_list <- FeaturePlot(obj, features = f_to_plot, reduction = "umap", combine = F)
+for (i in 1:length(f_list)){
+  f_list[[i]] <- f_list[[i]] + 
+    NoLegend() +
+    NoAxes()
+}
+f_list <- append(x = f_list, values = list((DimPlot(obj, label = T) + NoLegend() + NoAxes())), after = 0)
+```
+
+```{r fig.width=12, fig.height=10}
+g <- ggpubr::ggarrange(plotlist = f_list)
+g
+```
+
+```{r}
+ggsave(
+  filename = "wt_lps_preprocessed_flist.png",
+  plot = g,
+  device = "png",
+  path = "../outs/preprocessing",
+  width = 12, height = 10,
+  bg = "white"
+)
+```
+
+## Cell Type Annotation
+
+### Semi-supervised classification
+
+To begin with, we perform an initial round of cell type annotation on the preprocessed, "stand-alone" (e.g. non-integrated) object. These labels will be cross-referenced later in the integrated dataset to check the accuracy of data integration.
+
+```{r}
+Idents(wt_lps) <- "seurat_clusters"
+wt_lps <- RenameIdents(
+  wt_lps, 
+  `14` = "Astro", 
+  `1` = "Ex-Neu.", `3` = "Ex-Neu.", `5` = "Ex-Neu.", `7` = "Ex-Neu.", `9` = "Ex-Neu.", `16` = "Ex-Neu.", `17` = "Ex-Neu.", `21` = "Ex-Neu.", `24` = "Ex-Neu.",
+  `6` = "Inh-Neu.", `10` = "Inh-Neu.", `11` = "Inh-Neu.", `13` = "Inh-Neu.", `15` = "Inh-Neu.", `18` = "Inh-Neu.", `22` = "Inh-Neu.", `23` = "Inh-Neu.",
+  `4` = "Micro",
+  `12` = "BVs",
+  `8` = "OPCs",
+  `2` = "Oligo", `19` = "Oligo", `20` = "Oligo"
+  )
+wt_lps$cell_type_leiden <- Idents(wt_lps)
+```
+
+```{r fig.width=12, fig.height=5}
+d_list <- lapply(levels(wt_lps$cell_type_leiden), function(x){
+  DimPlot(wt_lps, cells.highlight = WhichCells(wt_lps, expression = cell_type_leiden == x)) + NoLegend() + NoAxes() + ggtitle(x)
+})
+ggpubr::ggarrange(plotlist = d_list, ncol = 4, nrow = 2)
+```
+
+### Manual curation
+
+Some cell appear to be mis-allocated with respect to their identity. To fix this, we perform iterative sub-clustering and manually curate the labels of these cells.
+
+```{r}
+Idents(wt_lps) <- "cell_type_leiden"
+```
+
+For blood vessel associated populations, the `BVs` cluster can be further divided into Endothelial cells (Endo), Pericytes (Peri), Smooth Muscle Cells (SMCs) and Vascular Leptomeningeal Cells (VLMCs), with respect to their markers (shown below). Additionally, some Oligodendrocytes (Mbp-positive) and Neurons (Slc17a7 or Gad2-positive) was mis-placed into this cluster by umap. We also check that their labels here.
+
+```{r}
+## Skip the manual steps and use stashed ids
+# bv_ids <- CellSelector(FeaturePlot(wt_lps, features = "Pecam1"))
+DimPlot(wt_lps, cells.highlight = bv_ids)
+# bv <- subset(wt_lps, cells = CellSelector(DimPlot(wt_lps)))
+bv <- subset(wt_lps, cells = bv_ids)
+bv <- bv |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:20, verbose = FALSE) |>
+  FindClusters(verbose = FALSE) |>
+  RunUMAP(dims = 1:20, verbose = FALSE)
+```
+
+```{r fig.width=12, fig.height=7.5}
+f_list <- FeaturePlot(bv, features = c("Pecam1","Cldn5","Tnr","Kcnj8","Acta2","Mustn1","Col1a1","Slc6a13","Gad2","Slc17a7","Map2","Mbp"), combine = FALSE)
+ggpubr::ggarrange(plotlist = f_list, ncol = 4, nrow = 3)
+```
+
+```{r}
+## Skip the manual steps and use stashed ids
+# endo_ids <- c()
+# endo_ids <- union(endo_ids, CellSelector(FeaturePlot(bv, features = "Pecam1")))
+# peri_ids <- CellSelector(FeaturePlot(bv, features = "Kcnj8"))
+# vlmc_ids <- CellSelector(FeaturePlot(bv, features = "Col1a1"))
+# smc_ids <- CellSelector(FeaturePlot(bv, features = "Acta2"))
+# oligo_ids <- CellSelector(FeaturePlot(bv, features = "Mbp"))
+# ex_neu_ids <- c()
+# ex_neu_ids <- union(ex_neu_ids, CellSelector(FeaturePlot(bv, features = "Slc17a7")))
+# inh_neu_ids <- CellSelector(FeaturePlot(bv, features = "Gad2"))
+bv <- SetIdent(bv, cells = bv_endo_ids, value = "Endo")
+bv <- SetIdent(bv, cells = bv_peri_ids, value = "Peri")
+bv <- SetIdent(bv, cells = bv_vlmc_ids, value = "VLMCs")
+bv <- SetIdent(bv, cells = bv_smc_ids, value = "SMCs")
+bv <- SetIdent(bv, cells = bv_oligo_ids, value = "Oligo")
+bv <- SetIdent(bv, cells = bv_ex_neu_ids, value = "Ex-Neu.")
+bv <- SetIdent(bv, cells = bv_inh_neu_ids, value = "Inh-Neu.")
+bv$cell_type_curated <- Idents(bv)
+```
+
+```{r fig.width=12, fig.height=5}
+d_list <- lapply(levels(bv$cell_type_curated), function(x){
+  DimPlot(bv, cells.highlight = WhichCells(bv, expression = cell_type_curated == x)) + NoLegend() + NoAxes() + ggtitle(x)
+})
+d_list <- append(x = d_list, values = list((DimPlot(bv) + NoAxes() + NoLegend())), after = 0)
+ggpubr::ggarrange(plotlist = d_list, ncol = 4, nrow = 2)
+```
+
+```{r}
+# Update labels in master object
+for(i in levels(bv$cell_type_curated)){
+  wt_lps <- SetIdent(wt_lps, cells = WhichCells(bv, expression = cell_type_curated == i), value = i)
+}
+```
+
+For Microglia/Macrophage, we refer to them as the Monocyte population and refine their labels with respect to a canonical marker, Mrc1, that readily distinguishes the Microglia and PVMs (Perivascular Macrophage).
+
+```{r}
+## Skip the manual steps and use stashed ids
+# mono_ids <- CellSelector(FeaturePlot(wt_lps, features = "Cx3cr1"))
+DimPlot(wt_lps, cells.highlight = mono_ids)
+mono <- subset(wt_lps, cells = mono_ids)
+mono <- mono |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:20, verbose = FALSE) |>
+  FindClusters(verbose = FALSE) |>
+  RunUMAP(dims = 1:20, verbose = FALSE)
+```
+
+```{r}
+# mono_pvm_ids <- CellSelector(FeaturePlot(mono, features = "Mrc1"))
+Idents(mono) <- "cell_type_leiden"
+mono <- SetIdent(mono, cells = mono_pvm_ids, value = "PVMs")
+mono$cell_type_curated <- Idents(mono)
+```
+
+```{r}
+# Update labels in master object
+for(i in levels(mono$cell_type_curated)){
+  wt_lps <- SetIdent(wt_lps, cells = WhichCells(mono, expression = cell_type_curated == i), value = i)
+}
+```
+
+```{r}
+# Stash curated labels
+wt_lps$cell_type_standalone <- Idents(wt_lps)
+
+# Append sample info
+wt_lps$sample = "WT LPS"
+wt_lps$genotype = "WT"
+wt_lps$treatment = "LPS"
+```
+
+## Save Results
+
+```{r}
+if(WRITE_CACHE){
+  save(correct_singlet_ids, bv_ids, bv_endo_ids, bv_ex_neu_ids, bv_inh_neu_ids, bv_oligo_ids, bv_peri_ids, bv_smc_ids, bv_vlmc_ids, mono_ids, mono_pvm_ids, 
+       file = "../miscs/wt_lps_ids.rda")
+  SeuratDisk::SaveH5Seurat(object = wt_lps, filename = "../data/WT-LPS-MO-0614/wt_lps_preprocessed.h5Seurat", overwrite = T, verbose = F)
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,345 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Signature Analysis'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'sig_analysis.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+set.seed(42)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(RColorBrewer)
+})
+source("../rscripts/avgLogExp.R")
+```
+
+## Load Data
+
+```{r warning=FALSE}
+suppressMessages({
+  ex_neu <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/ex_neu.h5Seurat", verbose = F)
+  inh_neu <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/inh_neu.h5Seurat", verbose = F)
+  astro <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/astro.h5Seurat", verbose = F)
+  oligo <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/oligo.h5Seurat", verbose = F)
+  opcs <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/opcs.h5Seurat", verbose = F)
+  micro <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/micro.h5Seurat", verbose = F)
+  endo <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/endo.h5Seurat", verbose = F)
+})
+```
+
+```{r}
+degs.cell_type.list <- readRDS("../outs/de_analysis/degs_cell_type_list.rds")
+```
+
+```{r}
+degs.cell_subtype.lps.wt_gdko.list <- readRDS("../outs/de_analysis/degs_cell_subtype_lps_wt_gdko_list.rds")
+```
+
+## Heatmaps
+
+### Microglia
+
+```{r}
+Idents(micro) <- "treatment"
+micro.csvd.lps.mks <- FindConservedMarkers(
+  object = micro, 
+  ident.1 = "LPS",
+  grouping.var = "genotype"
+  ) |>
+  rownames_to_column("gene")
+```
+
+```{r}
+x = micro.csvd.lps.mks |>
+  slice_min(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+y = micro.csvd.lps.mks |>
+  slice_max(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+z = degs.cell_subtype.lps.wt_gdko.list[["Micro"]] |>
+  slice_max(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+w = degs.cell_subtype.lps.wt_gdko.list[["Micro"]] |>
+  slice_min(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+micro$sample = factor(micro$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+micro <- ScaleData(micro, features = c(VariableFeatures(endo),x,y,z,w))
+micro_h1 = DoHeatmap(
+  object = micro, 
+  features = c(x,y),
+  group.by = "sample",
+  group.bar = T, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+micro_h2 = DoHeatmap(
+  object = micro, 
+  features = c(z,w),
+  group.by = "sample",
+  group.bar = F, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+ggpubr::ggarrange(micro_h1, micro_h2, common.legend = TRUE, ncol = 1, legend = "bottom")
+```
+
+### Astrocytes
+
+```{r}
+Idents(astro) <- "treatment"
+astro.csvd.lps.mks <- FindConservedMarkers(
+  object = astro, 
+  ident.1 = "LPS",
+  grouping.var = "genotype"
+  ) |>
+  rownames_to_column("gene")
+```
+
+```{r}
+x = astro.csvd.lps.mks |>
+  slice_min(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+y = astro.csvd.lps.mks |>
+  slice_max(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+z = degs.cell_subtype.lps.wt_gdko.list[["Astro"]] |>
+  slice_max(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+w = degs.cell_subtype.lps.wt_gdko.list[["Astro"]] |>
+  slice_min(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+astro$sample = factor(astro$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+astro <- ScaleData(astro, features = c(VariableFeatures(endo),x,y,z,w))
+astro_h1 = DoHeatmap(
+  object = astro, 
+  features = c(x,y),
+  group.by = "sample",
+  group.bar = T, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+astro_h2 = DoHeatmap(
+  object = astro, 
+  features = c(z,w),
+  group.by = "sample",
+  group.bar = F, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+ggpubr::ggarrange(astro_h1, astro_h2, common.legend = TRUE, ncol = 1, legend = "bottom")
+```
+
+### Endothelial Cells
+
+```{r}
+Idents(endo) <- "treatment"
+endo.csvd.lps.mks <- FindConservedMarkers(
+  object = endo, 
+  ident.1 = "LPS",
+  grouping.var = "genotype"
+  ) |>
+  rownames_to_column("gene")
+```
+
+```{r}
+x = endo.csvd.lps.mks |>
+  slice_min(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+y = endo.csvd.lps.mks |>
+  slice_max(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+z = degs.cell_subtype.lps.wt_gdko.list[["Endo"]] |>
+  slice_max(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+w = degs.cell_subtype.lps.wt_gdko.list[["Endo"]] |>
+  slice_min(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+endo$sample = factor(endo$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+endo <- ScaleData(endo, features = c(VariableFeatures(endo),x,y,z,w))
+endo_h1 = DoHeatmap(
+  object = endo, 
+  features = c(x,y),
+  group.by = "sample",
+  group.bar = T, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+endo_h2 = DoHeatmap(
+  object = endo, 
+  features = c(z,w),
+  group.by = "sample",
+  group.bar = F, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+ggpubr::ggarrange(endo_h1, endo_h2, common.legend = TRUE, ncol = 1, legend = "bottom")
+```
+
+### OPCs
+
+```{r}
+Idents(opcs) <- "treatment"
+opcs.csvd.lps.mks <- FindConservedMarkers(
+  object = opcs, 
+  ident.1 = "LPS",
+  grouping.var = "genotype"
+  ) |>
+  rownames_to_column("gene")
+```
+
+```{r}
+x = opcs.csvd.lps.mks |>
+  slice_min(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+y = opcs.csvd.lps.mks |>
+  slice_max(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+z = degs.cell_subtype.lps.wt_gdko.list[["OPCs"]] |>
+  slice_max(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+w = degs.cell_subtype.lps.wt_gdko.list[["OPCs"]] |>
+  slice_min(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+opcs$sample = factor(opcs$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+opcs <- ScaleData(opcs, features = c(VariableFeatures(opcs),x,y,z,w))
+opcs_h1 = DoHeatmap(
+  object = opcs, 
+  features = c(x,y),
+  group.by = "sample",
+  group.bar = T, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+opcs_h2 = DoHeatmap(
+  object = opcs, 
+  features = c(z,w),
+  group.by = "sample",
+  group.bar = F, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+ggpubr::ggarrange(opcs_h1, opcs_h2, common.legend = TRUE, ncol = 1, legend = "bottom")
+```
+
+### Oligodendrocytes
+
+```{r}
+Idents(oligo) <- "treatment"
+oligo.csvd.lps.mks <- FindConservedMarkers(
+  object = oligo, 
+  ident.1 = "LPS",
+  grouping.var = "genotype"
+  ) |>
+  rownames_to_column("gene")
+```
+
+```{r}
+x = oligo.csvd.lps.mks |>
+  slice_min(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+y = oligo.csvd.lps.mks |>
+  slice_max(order_by = GDKO_avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+z = degs.cell_type.lps.wt_gdko.list[["OPCs"]] |>
+  slice_max(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+w = degs.cell_type.lps.wt_gdko.list[["OPCs"]] |>
+  slice_min(order_by = avg_log2FC, n = 200) |>
+  pull("gene")
+```
+
+```{r}
+oligo$sample = factor(oligo$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+oligo <- ScaleData(oligo, features = c(VariableFeatures(oligo),x,y,z,w))
+oligo_h1 = DoHeatmap(
+  object = oligo, 
+  features = c(x,y),
+  group.by = "sample",
+  group.bar = T, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+oligo_h2 = DoHeatmap(
+  object = oligo, 
+  features = c(z,w),
+  group.by = "sample",
+  group.bar = F, label = F
+  ) +
+  guides(color = "none") +
+  theme(
+    axis.text.y = element_blank(), 
+    plot.margin = margin(t=0,r=0,b=0,l=0)
+  )
+ggpubr::ggarrange(oligo_h1, oligo_h2, common.legend = TRUE, ncol = 1, legend = "bottom")
+```

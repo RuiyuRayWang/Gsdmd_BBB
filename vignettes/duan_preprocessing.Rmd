@@ -1,0 +1,163 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Preprocessing workflow for Duan (2018)'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'duan_preprocessing.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+DOWNLOAD_GEO = FALSE  ## Set to TRUE on first run
+WRITE_CACHE = TRUE
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(scater)
+  library(tidyverse)
+  library(SoupX)
+})
+```
+
+```{r}
+source("../rscripts/renameRows.R")
+```
+
+```{r}
+set.seed(42)
+```
+
+# Pre-processing Workflow
+
+We acquire a dataset of brain vascular populations published by Duan (2018, Neuron). We will download the processed raw count matrix (GSE112436) from GEO.
+
+## Load Data
+
+```{r}
+if(DOWNLOAD_GEO){
+  suppressPackageStartupMessages({library(GEOquery)})
+  options(timeout = 6000)  ## In case of slow Internet connections
+  getGEOSuppFiles(GEO = "GSE112436", makeDirectory = T, baseDir = '../data/Duan_2018/')
+  untar(
+    tarfile = "../data/Duan_2018/GSE112436_RAW.tar", 
+    exdir = "../data/Duan_2018/GSE112436/"
+    )
+}
+```
+
+```{r}
+files = data.frame(path = list.files(path = "../data/Duan_2018/GSE112436", pattern = "*.csv.gz", full.names = T))
+rownames(files) <- sub(pattern = ".*_", replacement = "", x = sub(pattern = ".csv.gz", replacement = "", x =  basename(files$path)))
+
+df.list <- apply(X = files, MARGIN = 1, FUN = function(f){
+  read.csv(file = f, header = TRUE, row.names = 1)
+  })
+
+# # Sanity check: identical rownames
+# identical(x = rownames(df.list[[1]]), y = rownames(df.list[[2]]))  # TRUE for all pair-wise comparison
+
+# Rename data rownames from ensembl id to gene symbol
+anno = read.table("../miscs/MM.GRCm38.102.annotation.tab", sep = "\t", col.names = c("ensembl_id","symbol"))
+df.list <- lapply(
+  X = df.list, 
+  FUN = function(df){
+    return(renameRows(df = df, anno = anno))
+  })
+
+# Create Seurat objects
+cells.list <- setNames(
+  object = sapply(X = seq_along(df.list), FUN = function(i){
+    cells <- CreateSeuratObject(counts = df.list[[i]], project = "GD_BBB")
+    cells[["sample"]] = names(df.list[i])
+    return(cells)
+    },
+    simplify = FALSE, 
+    USE.NAMES = FALSE),
+  nm = names(df.list)
+  )
+
+cells <- merge(x = cells.list[[1]], y = c(cells.list[[2]], cells.list[[3]], cells.list[[4]], cells.list[[5]], cells.list[[6]]))
+```
+
+### Quality Control
+
+We will use quality metrics described in the original publication for QC filtering. 
+> 1) genes were expressed by at least 3 cells
+> 2) cells that expressed 600 and less than 7500 genes
+> 3) the percentage of mitochondrial genes per cell was less than 25%
+
+```{r}
+duan <- subset(duan, subset = nFeature_RNA > 600 | nFeature_RNA < 7500)
+```
+
+To keep the metadata slots consistent with other datasets, we also run `scater` QC workflow, but refrain from using the QC filtering metrics defined by the `quickPerCellQC` function.
+```{r}
+Seurat_Obj_Diet <- DietSeurat(duan)
+cells.sce <- as.SingleCellExperiment(Seurat_Obj_Diet)
+
+## Cell level QC
+per.cell <- perCellQCMetrics(cells.sce, subsets = list(Mito = grep("^mt-", rownames(cells.sce)),
+                                                       Ribo = grep("\\bRp[sl]\\d+[^k]*\\b", rownames(cells.sce))))
+qc.stats <- quickPerCellQC(per.cell, percent_subsets=c("subsets_Mito_percent"))
+
+colData(cells.sce) <- cbind(colData(cells.sce), cbind(per.cell, qc.stats))
+cells.sce.filtered <- cells.sce[,cells.sce$subsets_Mito_percent < 25]
+
+## Feature level QC
+keep_feature <- nexprs(cells.sce.filtered, byrow=TRUE) > 0
+## Remove mitochondrial and ribosomal genes which does not contribute to analysis (i.e. cell clustering)
+keep_feature[grep("\\bRp[sl]\\d+[^k]*\\b", rownames(cells.sce))] <- FALSE
+keep_feature[grep("mt-", rownames(cells.sce))] <- FALSE
+cells.sce.filtered <- cells.sce.filtered[keep_feature,]
+dim(cells.sce.filtered)
+
+duan <- as.Seurat(cells.sce.filtered)
+duan$ident <- NULL
+```
+
+
+## Standard Seurat Workflow
+
+```{r}
+duan <- duan |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:30, verbose = FALSE) |>
+  FindClusters(verbose = FALSE) |>
+  RunTSNE(dims = 1:30, verbose = FALSE) |>
+  RunUMAP(dims = 1:30, verbose = FALSE)
+```
+
+```{r}
+DimPlot(duan, reduction = "tsne", label = T, label.box = T) + 
+  NoAxes() +
+  ggtitle(label = "Duan et al.: P14 HIP Saline/LPS")
+```
+
+## Save Results
+
+```{r}
+if(WRITE_CACHE){
+  SeuratDisk::SaveH5Seurat(object = duan, filename = "../data/Duan_2018/vanlandewijck.h5Seurat", overwrite = T, verbose = F)
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```

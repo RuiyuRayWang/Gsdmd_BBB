@@ -1,0 +1,556 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Integrated Analysis'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'integrated_analysis.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+WRITE_CACHE = TRUE  ## Set to TRUE on first run
+```
+
+```{r}
+set.seed(42)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(tidyverse)
+})
+```
+
+```{r}
+reticulate::use_python("/home/luolab/miniconda3/envs/r-reticulate/bin/python")
+```
+
+In this vignette, we will perform data integration on the preprocessed, label-refined datasets:
+
+  - WT - PBS
+  - WT - LPS
+  - GDKO - PBS
+  - GDKO - LPS
+
+The object we will be working with is `cells.use` from the `Label Curation` vignette. Eight major cell types were used as the starting point of the analysis. They are: Excitatory Neurons (Ex-Neu.), Inhibitory Neurons (Inh-Neu.), Astrocytes (Astro), Oligodendrocytes (Oligo), Oligodendrocyte Precursor Cells (OPCs), Endothelial Cells (Endo), and Microglia (Micro). We omit other cell types (i.e. Proliferating OPCs) because they represent under-sized populations and could potentially confound the integration workflow. They're also not in our primary interest because the low cell counts are unlikely to have enough power to yield meaningful conclusions.
+
+We'll also characterize cell subtype identities after integration, especially for neuronal populations, by referencing canonical markers in previously publications.
+
+We will use two methods - Seurat and LIGER - to perform integration, and we will cross-validate their results with the previously annotated cell type labels on stand-alone objects (`cell_type_standalone`).
+
+# Integration Workflow
+
+## Load Data
+
+```{r}
+suppressMessages({
+  cells.use <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/cells_use.h5Seurat", verbose = FALSE)
+})
+```
+
+## Perform integration workflow
+
+### Integration by Seurat
+
+```{r}
+cells.list <- SplitObject(object = cells.use, split.by = "sample")
+
+cells.list <- lapply(X = cells.list, FUN = function(x) {
+  x <- NormalizeData(x, verbose = FALSE)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+})
+features <- SelectIntegrationFeatures(object.list = cells.list, verbose = FALSE)
+
+cells.anchors <- FindIntegrationAnchors(object.list = cells.list, anchor.features = features, verbose = FALSE)
+cells.combined <- IntegrateData(anchorset = cells.anchors, verbose = FALSE)
+
+DefaultAssay(cells.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+cells.combined <- ScaleData(cells.combined, verbose = FALSE)
+cells.combined <- RunPCA(cells.combined, npcs = 50, verbose = FALSE)
+cells.combined <- RunUMAP(cells.combined, reduction = "pca", reduction.name = "umap.int", reduction.key = "UMAPint_", dims = 1:50, verbose = FALSE)
+cells.combined <- FindNeighbors(cells.combined, reduction = "pca", dims = 1:50, verbose = FALSE)
+cells.combined <- FindClusters(cells.combined, resolution = 0.8, verbose = FALSE)
+```
+
+### Dimension Reduction and Clustering on Un-integrated assay
+
+```{r}
+DefaultAssay(cells.combined) <- "RNA"
+cells.combined <- NormalizeData(cells.combined, verbose = FALSE)
+cells.combined <- FindVariableFeatures(cells.combined, verbose = FALSE)
+cells.combined <- ScaleData(cells.combined, verbose = FALSE)
+cells.combined <- RunPCA(cells.combined, verbose = FALSE)
+cells.combined <- RunUMAP(cells.combined, reduction = "pca", reduction.name = "umap", reduction.key = "UMAP_", dims = 1:50, verbose = FALSE)
+```
+
+### Summary UMAP plot in Un-integrated and Integrated Space
+
+```{r fig.width=8, fig.height=5}
+p1 <- DimPlot(cells.combined, group.by = "sample", reduction = "umap") + NoAxes() + ggtitle("Un-integrated")
+p2 <- DimPlot(cells.combined, group.by = "sample", reduction = "umap.int") + NoAxes() + ggtitle("Integrated")
+p3 <- DimPlot(cells.combined, group.by = "cell_type", reduction = "umap", label = T) + NoAxes()
+p4 <- DimPlot(cells.combined, group.by = "cell_type", reduction = "umap.int", label = T) + NoAxes()
+ggpubr::ggarrange(p1, p2, common.legend = TRUE, nrow = 1, legend = "right") / ggpubr::ggarrange(p3, p4, common.legend = TRUE, nrow = 1, legend = "right")
+```
+
+## Sub-type Classifications
+
+The central nervous system is remarkably complex, as demonstrated by the immense level of cellular heterogeneity. Here, we perform sub-cluclustering on Excitatory Neurons and Inhibitory Neurons to identify heterogeneous populations within these populations. While this seem irrelevant to our primitive study at first sight (the role Gsdmd played in inflammation challenged CNS), later it will help us investigate the heterogeneous response of neuronal sub-populations to LPS challenge.
+
+### Glutamatergic (Excitatory) Neurons
+
+We first subset out Excitatory Neurons and perform integration with respect to samples. Using the Seurat v3 anchor method for integration, we detect 8 clusters with Leiden algorithm[^1] under the resolution level of 0.15. We calculated conserved markers for all identified clusters and validate them with published canoincal markers describing motor cortex glutamatergic neuron subtypes[^2].
+
+```{r}
+ex_neu <- subset(cells.combined, subset = cell_type == "Ex-Neu.")
+ex_neu$master_integrated_snn_res.0.8 <- ex_neu$integrated_snn_res.0.8
+ex_neu$integrated_snn_res.0.8 <- NULL
+
+ex.list <- SplitObject(object = ex_neu, split.by = "sample")
+
+ex.list <- lapply(X = ex.list, FUN = function(x) {
+  x <- NormalizeData(x, verbose = FALSE)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+})
+features <- SelectIntegrationFeatures(object.list = ex.list, verbose = FALSE)
+
+ex.anchors <- FindIntegrationAnchors(object.list = ex.list, anchor.features = features, verbose = FALSE)
+ex_neu <- IntegrateData(anchorset = ex.anchors, verbose = FALSE)
+
+DefaultAssay(ex_neu) <- "integrated"
+ex_neu <- ScaleData(ex_neu, verbose = FALSE)
+ex_neu <- RunPCA(ex_neu, npcs = 50, verbose = FALSE)
+ex_neu <- RunUMAP(ex_neu, reduction = "pca", reduction.name = "umap.int", reduction.key = "UMAPint_", dims = 1:30, verbose = FALSE)
+ex_neu <- FindNeighbors(ex_neu, reduction = "pca", dims = 1:30, verbose = FALSE)
+ex_neu <- FindClusters(ex_neu, resolution = 0.15, algorithm = 4, verbose = FALSE)
+
+DefaultAssay(ex_neu) <- "RNA"
+ex_neu <- NormalizeData(ex_neu, verbose = FALSE)
+ex_neu <- FindVariableFeatures(ex_neu, verbose = FALSE)
+ex_neu <- ScaleData(ex_neu, verbose = FALSE)
+ex_neu <- RunPCA(ex_neu, verbose = FALSE)
+ex_neu <- RunUMAP(ex_neu, reduction = "pca", reduction.name = "umap", reduction.key = "UMAP_", dims = 1:30, verbose = FALSE)
+```
+
+```{r fig.width=9, fig.height=5}
+d1 <- DimPlot(ex_neu, group.by = "integrated_snn_res.0.15", reduction = "umap.int", label = T) + NoAxes() + ggtitle("Integrated")
+d2 <- DimPlot(ex_neu, group.by = "integrated_snn_res.0.15", reduction = "umap", label = T) + NoAxes() + ggtitle("Un-integrated")
+d3 <- DimPlot(ex_neu, group.by = "sample", reduction = "umap.int") + NoAxes() + ggtitle(NULL)
+d4 <- DimPlot(ex_neu, group.by = "sample", reduction = "umap") + NoAxes() + ggtitle(NULL)
+ggpubr::ggarrange(d1, d2, common.legend = TRUE, nrow = 1, legend = "right") / ggpubr::ggarrange(d3, d4, common.legend = TRUE, nrow = 1, legend = "right")
+```
+
+#### Excitatory Neurons: Subtype Identification
+
+```{r}
+Idents(ex_neu) <- "integrated_snn_res.0.15"
+csvd.mks.ex_neu <- sapply(
+  X = levels(ex_neu$integrated_snn_res.0.15), 
+  FUN = function(x){
+    FindConservedMarkers(object = ex_neu, ident.1 = x, grouping.var = "sample", only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene")
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+```{r}
+ex_neu <- RenameIdents(
+  ex_neu, 
+  `1` = "Ex-L4/5 IT",  ## previously Ex-Grm2
+  `2` = "Ex-L6 CT",  ## previously Ex-Foxp2
+  `3` = "Ex-L2/3 IT",  ## previously Ex-Lamp5
+  `4` = "Ex-L5/6 NP1",  ## previously Ex-Htr4
+  `5` = "Ex-L6 IT",  ## previously Ex-Oprk1
+  `6` = "Ex-L5 IT",  ## previously Ex-Deptor
+  `7` = "Ex-L5/6 NP2",  ## previously Ex-Foxp2
+  `8` = "Ex-L6b"  ## previously Ex-Moxd1
+  )
+ex_neu[["cell_subtype"]] <- Idents(ex_neu)
+```
+
+```{r fig.width=12, fig.height=9}
+ex_plots <- list()
+ex_plots[["e11"]] <- DimPlot(ex_neu, group.by = "cell_subtype", reduction = "umap.int", label = TRUE) + NoAxes() + NoLegend()
+ex_plots[["e12"]] <- FeaturePlot(ex_neu, features = "Slc30a3", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e13"]] <- FeaturePlot(ex_neu, features = "Otof", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e14"]] <- FeaturePlot(ex_neu, features = "Rorb", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e15"]]  <- FeaturePlot(ex_neu, features = "Rspo1", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e16"]]  <- FeaturePlot(ex_neu, features = "Fezf2", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e17"]]  <- FeaturePlot(ex_neu, features = "Sulf1", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e18"]]  <- FeaturePlot(ex_neu, features = "Sla2", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e19"]]  <- FeaturePlot(ex_neu, features = "Foxp2", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e110"]]  <- FeaturePlot(ex_neu, features = "Nxph4", reduction = "umap.int") + NoAxes() + NoLegend()
+ex_plots[["e21"]] <- DimPlot(ex_neu, group.by = "cell_subtype", reduction = "umap", label = TRUE) + NoAxes() + NoLegend()
+ex_plots[["e22"]] <- FeaturePlot(ex_neu, features = "Slc30a3", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e23"]] <- FeaturePlot(ex_neu, features = "Otof", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e24"]] <- FeaturePlot(ex_neu, features = "Rorb", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e25"]] <- FeaturePlot(ex_neu, features = "Rspo1", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e26"]] <- FeaturePlot(ex_neu, features = "Fezf2", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e27"]] <- FeaturePlot(ex_neu, features = "Sulf1", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e28"]] <- FeaturePlot(ex_neu, features = "Sla2", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e29"]] <- FeaturePlot(ex_neu, features = "Foxp2", reduction = "umap") + NoAxes() + NoLegend()
+ex_plots[["e210"]] <- FeaturePlot(ex_neu, features = "Nxph4", reduction = "umap") + NoAxes() + NoLegend()
+(ex_plots[["e11"]] | ex_plots[["e12"]] | ex_plots[["e13"]] | ex_plots[["e14"]] | ex_plots[["e15"]]) / (ex_plots[["e16"]] | ex_plots[["e17"]] | ex_plots[["e18"]] | ex_plots[["e19"]] | ex_plots[["e110"]]) / 
+  (ex_plots[["e21"]] | ex_plots[["e22"]] | ex_plots[["e23"]] | ex_plots[["e24"]] | ex_plots[["e25"]]) / (ex_plots[["e26"]] | ex_plots[["e27"]] | ex_plots[["e28"]] | ex_plots[["e29"]] | ex_plots[["e210"]])
+```
+
+```{r fig.width=12, fig.height=3}
+ex_plots[["e1"]] <- DimPlot(ex_neu, group.by = "sample", reduction = "umap.int") + ggtitle("Excitatory Neurons") + NoAxes()
+ex_plots[["e2"]] <- DimPlot(ex_neu, group.by = "genotype", reduction = "umap.int") + NoAxes()
+ex_plots[["e3"]] <- DimPlot(ex_neu, group.by = "treatment", reduction = "umap.int") + NoAxes()
+ex_plots[["e4"]] <- DimPlot(ex_neu, group.by = "sample", reduction = "umap") + ggtitle("Excitatory Neurons") + NoAxes()
+ex_plots[["e5"]] <- DimPlot(ex_neu, group.by = "genotype", reduction = "umap") + NoAxes()
+ex_plots[["e6"]] <- DimPlot(ex_neu, group.by = "treatment", reduction = "umap") + NoAxes()
+(ex_plots[["e1"]] | ex_plots[["e2"]] | ex_plots[["e3"]]) /
+  (ex_plots[["e4"]] | ex_plots[["e5"]] | ex_plots[["e6"]])
+```
+
+Update labels in master object.
+```{r}
+Idents(cells.combined) <- "cell_type"
+for(i in levels(ex_neu$cell_subtype)){
+  cells.combined <- SetIdent(cells.combined, cells = WhichCells(ex_neu, expression = cell_subtype == i), value = i)
+}
+```
+
+### GABAergic (Inhibitory) Neurons
+
+Interestingly, even without integration, GABAergic Neurons readily display a "well-mixed" appearance in the UMAP embedding with respect to samples. This suggests that neither genotype nor treatment affects the transcriptional state of GABAergic populations.
+
+```{r}
+inh_neu <- subset(cells.combined, subset = cell_type == "Inh-Neu.")
+inh_neu[["integrated"]] <- NULL
+
+DefaultAssay(inh_neu) <- "RNA"
+inh_neu <- NormalizeData(inh_neu, verbose = FALSE)
+inh_neu <- FindVariableFeatures(inh_neu, verbose = FALSE)
+inh_neu <- ScaleData(inh_neu, verbose = FALSE)
+inh_neu <- RunPCA(inh_neu, verbose = FALSE)
+inh_neu <- FindNeighbors(inh_neu, dims = 1:20, verbose = FALSE)
+inh_neu <- FindClusters(inh_neu, algorithm = 4, resolution = .03, verbose = FALSE)
+inh_neu <- RunUMAP(inh_neu, reduction = "pca", reduction.name = "umap", reduction.key = "UMAP_", dims = 1:20, verbose = FALSE)
+```
+
+```{r fig.width=8, fig.height=3}
+d1 <- DimPlot(inh_neu, group.by = "RNA_snn_res.0.03", reduction = "umap", label = T) + NoAxes() + ggtitle("Un-integrated")
+d2 <- DimPlot(inh_neu, group.by = "sample", reduction = "umap") + NoAxes() + ggtitle(NULL)
+d1 | d2
+```
+
+#### Inhibitory Neurons: Subtype Identification
+
+```{r}
+Idents(inh_neu) <- "RNA_snn_res.0.03"
+subtype.mks.inh_neu <- sapply(
+  X = levels(inh_neu$RNA_snn_res.0.03), 
+  FUN = function(x){
+    FindMarkers(object = inh_neu, ident.1 = x, only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene")
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+```{r}
+inh_neu <- RenameIdents(
+  inh_neu, 
+  `1` = "Inh-Vip",  ## Vip neurons
+  `2` = "Inh-Lhx6",  ## Lhx6+, contains both Sst and Pvalb
+  `3` = "Inh-Lamp5",  ## Lamp5
+  `4` = "Inh-Chodl"  ## A small GABAergic population
+  )
+inh_neu[["cell_subtype"]] <- Idents(inh_neu)
+```
+
+```{r fig.width=12, fig.height=5}
+inh_plots <- list()
+inh_plots[["i11"]] <- DimPlot(inh_neu, group.by = "RNA_snn_res.0.03", reduction = "umap", label = TRUE) + NoAxes() + NoLegend()
+inh_plots[["i12"]] <- FeaturePlot(inh_neu, features = "Gad2", reduction = "umap") + NoAxes() + NoLegend()
+inh_plots[["i13"]] <- FeaturePlot(inh_neu, features = "Vip", reduction = "umap") + NoAxes() + NoLegend()
+inh_plots[["i14"]] <- FeaturePlot(inh_neu, features = "Sst", reduction = "umap") + NoAxes() + NoLegend()
+inh_plots[["i15"]]  <- FeaturePlot(inh_neu, features = "Pvalb", reduction = "umap") + NoAxes() + NoLegend()
+inh_plots[["i16"]]  <- FeaturePlot(inh_neu, features = "Lhx6", reduction = "umap") + NoAxes() + NoLegend()
+inh_plots[["i17"]]  <- FeaturePlot(inh_neu, features = "Lamp5", reduction = "umap") + NoAxes() + NoLegend()
+inh_plots[["i18"]]  <- FeaturePlot(inh_neu, features = "Chodl", reduction = "umap") + NoAxes() + NoLegend()
+
+(inh_plots[["i11"]] | inh_plots[["i12"]] | inh_plots[["i13"]] | inh_plots[["i14"]] ) /
+  (inh_plots[["i15"]] | inh_plots[["i16"]] | inh_plots[["i17"]] | inh_plots[["i18"]])
+```
+
+```{r fig.width=12, fig.height=3}
+inh_plots[["i1"]] <- DimPlot(inh_neu, group.by = "sample", reduction = "umap") + ggtitle("Excitatory Neurons") + NoAxes()
+inh_plots[["i2"]] <- DimPlot(inh_neu, group.by = "genotype", reduction = "umap") + NoAxes()
+inh_plots[["i3"]] <- DimPlot(inh_neu, group.by = "treatment", reduction = "umap") + NoAxes()
+inh_plots[["i1"]] | inh_plots[["i2"]] | inh_plots[["i3"]]
+```
+
+Update labels in master object.
+```{r}
+for(i in levels(inh_neu$cell_subtype)){
+  cells.combined <- SetIdent(cells.combined, cells = WhichCells(inh_neu, expression = cell_subtype == i), value = i)
+}
+```
+
+### Oligodendrocytes
+
+We are also excited to see that the dataset captured oligodendrocytes at different differentiation stages. Here, we refine their subtype labels by regarding to some known canonical markers[^3].
+
+```{r}
+oligo <- subset(cells.combined, subset = cell_type == "Oligo")
+oligo$master_integrated_snn_res.0.8 <- oligo$integrated_snn_res.0.8
+oligo$integrated_snn_res.0.8 <- NULL
+
+ex.list <- SplitObject(object = oligo, split.by = "sample")
+
+ex.list <- lapply(X = ex.list, FUN = function(x) {
+  x <- NormalizeData(x, verbose = FALSE)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+})
+features <- SelectIntegrationFeatures(object.list = ex.list, verbose = FALSE)
+
+ex.anchors <- FindIntegrationAnchors(object.list = ex.list, anchor.features = features, verbose = FALSE)
+oligo <- IntegrateData(anchorset = ex.anchors, verbose = FALSE)
+
+DefaultAssay(oligo) <- "integrated"
+oligo <- ScaleData(oligo, verbose = FALSE)
+oligo <- RunPCA(oligo, npcs = 50, verbose = FALSE)
+oligo <- RunUMAP(oligo, reduction = "pca", reduction.name = "umap.int", reduction.key = "UMAPint_", dims = 1:30, verbose = FALSE)
+oligo <- FindNeighbors(oligo, reduction = "pca", dims = 1:30, verbose = FALSE)
+oligo <- FindClusters(oligo, resolution = 0.5, algorithm = 4, verbose = FALSE)
+
+DefaultAssay(oligo) <- "RNA"
+oligo <- NormalizeData(oligo, verbose = FALSE)
+oligo <- FindVariableFeatures(oligo, verbose = FALSE)
+oligo <- ScaleData(oligo, verbose = FALSE)
+oligo <- RunPCA(oligo, verbose = FALSE)
+oligo <- RunUMAP(oligo, reduction = "pca", reduction.name = "umap", reduction.key = "UMAP_", dims = 1:30, verbose = FALSE)
+```
+
+```{r fig.width=9, fig.height=5}
+d1 <- DimPlot(oligo, group.by = "integrated_snn_res.0.5", reduction = "umap.int", label = T) + NoAxes() + ggtitle("Integrated")
+d2 <- DimPlot(oligo, group.by = "integrated_snn_res.0.5", reduction = "umap", label = T) + NoAxes() + ggtitle("Un-integrated")
+d3 <- DimPlot(oligo, group.by = "sample", reduction = "umap.int") + NoAxes() + ggtitle(NULL)
+d4 <- DimPlot(oligo, group.by = "sample", reduction = "umap") + NoAxes() + ggtitle(NULL)
+ggpubr::ggarrange(d1, d2, common.legend = TRUE, nrow = 1, legend = "right") / ggpubr::ggarrange(d3, d4, common.legend = TRUE, nrow = 1, legend = "right")
+```
+
+#### Oligodendrocytes: Subtype Identification
+
+```{r}
+Idents(oligo) <- "integrated_snn_res.0.5"
+csvd.mks.oligo <- sapply(
+  X = levels(oligo$integrated_snn_res.0.5), 
+  FUN = function(x){
+    FindConservedMarkers(object = oligo, ident.1 = x, grouping.var = "sample", only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene")
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+```{r}
+oligo <- RenameIdents(
+  oligo, 
+  `1` = "MOL2",  ## Mature Oligodendrocytes 2
+  `2` = "MOL2",  ## Mature Oligodendrocytes 2
+  `3` = "MOL1",  ## Mature Oligodendrocytes 1
+  `4` = "COPs", ## Committed Oligodendrocyte Precursors
+  `5` = "MOL1",  ## Mature Oligodendrocytes 1
+  `6` = "MOL2",  ## Mature Oligodendrocytes 2
+  `7` = "NFOLs",  ## Newly Formed Oligodendrocytes
+  `8` = "MOL2"  ## Mature Oligodendrocytes 2
+  )
+oligo[["cell_subtype"]] <- Idents(oligo)
+```
+
+```{r fig.width=12, fig.height=9}
+ol_plots <- list()
+ol_plots[["o11"]] <- DimPlot(oligo, group.by = "integrated_snn_res.0.5", reduction = "umap.int", label = TRUE) + NoAxes() + NoLegend()
+ol_plots[["o12"]] <- DimPlot(oligo, group.by = "cell_subtype", reduction = "umap.int", label = TRUE) + NoAxes() + NoLegend()
+ol_plots[["o13"]] <- FeaturePlot(oligo, features = "Olig1", reduction = "umap.int") + NoAxes() + NoLegend()
+ol_plots[["o14"]] <- FeaturePlot(oligo, features = "Pdgfra", reduction = "umap.int") + ggtitle("OPCs - Pdgfra") + NoAxes() + NoLegend()
+ol_plots[["o15"]] <- FeaturePlot(oligo, features = "Tnr", reduction = "umap.int") + ggtitle("COPs - Tnr") + NoAxes() + NoLegend()
+ol_plots[["o16"]] <- FeaturePlot(oligo, features = "Tmem2", reduction = "umap.int") + ggtitle("NFOLs - Tmem2") + NoAxes() + NoLegend()
+ol_plots[["o17"]]  <- FeaturePlot(oligo, features = "Opalin", reduction = "umap.int") + ggtitle("MOLs - Opalin") + NoAxes() + NoLegend()
+ol_plots[["o18"]]  <- FeaturePlot(oligo, features = "Dock5", reduction = "umap.int") + ggtitle("MOLs - Dock5") + NoAxes() + NoLegend()
+
+ol_plots[["o21"]] <- DimPlot(oligo, group.by = "integrated_snn_res.0.5", reduction = "umap", label = TRUE) + NoAxes() + NoLegend()
+ol_plots[["o22"]] <- DimPlot(oligo, group.by = "cell_subtype", reduction = "umap", label = TRUE) + NoAxes() + NoLegend()
+ol_plots[["o23"]] <- FeaturePlot(oligo, features = "Olig1", reduction = "umap") + NoAxes() + NoLegend()
+ol_plots[["o24"]] <- FeaturePlot(oligo, features = "Pdgfra", reduction = "umap") + ggtitle("OPCs - Pdgfra") + NoAxes() + NoLegend()
+ol_plots[["o25"]] <- FeaturePlot(oligo, features = "Tnr", reduction = "umap") + ggtitle("COPs - Tnr") + NoAxes() + NoLegend()
+ol_plots[["o26"]] <- FeaturePlot(oligo, features = "Tmem2", reduction = "umap") + ggtitle("NFOLs - Tmem2") + NoAxes() + NoLegend()
+ol_plots[["o27"]] <- FeaturePlot(oligo, features = "Opalin", reduction = "umap") + ggtitle("MOLs - Opalin") + NoAxes() + NoLegend()
+ol_plots[["o28"]] <- FeaturePlot(oligo, features = "Dock5", reduction = "umap") + ggtitle("MOLs - Dock5") + NoAxes() + NoLegend()
+
+(ol_plots[["o11"]] | ol_plots[["o12"]] | ol_plots[["o13"]] | ol_plots[["o14"]]) / (ol_plots[["o15"]] | ol_plots[["o16"]] | ol_plots[["o17"]] | ol_plots[["o18"]]) / 
+  (ol_plots[["o21"]] | ol_plots[["o22"]] | ol_plots[["o23"]] | ol_plots[["o24"]]) / (ol_plots[["o25"]] | ol_plots[["o26"]] | ol_plots[["o27"]] | ol_plots[["o28"]])
+```
+
+```{r fig.width=12, fig.height=3}
+ol_plots[["ol1"]] <- DimPlot(oligo, group.by = "sample", reduction = "umap.int") + ggtitle("Oligodendrocytes") + NoAxes()
+ol_plots[["ol2"]] <- DimPlot(oligo, group.by = "genotype", reduction = "umap.int") + NoAxes()
+ol_plots[["ol3"]] <- DimPlot(oligo, group.by = "treatment", reduction = "umap.int") + NoAxes()
+ol_plots[["ol4"]] <- DimPlot(oligo, group.by = "sample", reduction = "umap") + ggtitle("Oligodendrocytes") + NoAxes()
+ol_plots[["ol5"]] <- DimPlot(oligo, group.by = "genotype", reduction = "umap") + NoAxes()
+ol_plots[["ol6"]] <- DimPlot(oligo, group.by = "treatment", reduction = "umap") + NoAxes()
+(ol_plots[["ol1"]] | ol_plots[["ol2"]] | ol_plots[["ol3"]]) /
+  (ol_plots[["ol4"]] | ol_plots[["ol5"]] | ol_plots[["ol6"]])
+```
+
+Update labels in master object.
+```{r}
+for(i in levels(oligo$cell_subtype)){
+  cells.combined <- SetIdent(cells.combined, cells = WhichCells(oligo, expression = cell_subtype == i), value = i)
+}
+```
+
+```{r}
+cells.combined[["cell_subtype"]] <- Idents(cells.combined)
+```
+
+## Processing Independent Cell Type Objects
+
+### OPCs
+
+```{r fig.width=5, fig.height=3}
+opcs <- cells.combined |> subset(cells = WhichCells(cells.combined, expression = cell_type == "OPCs")) |> NormalizeData(verbose=F) |> 
+  FindVariableFeatures(verbose=F) |> ScaleData(verbose=F) |> RunPCA(verbose=F) |> FindNeighbors(dims = 1:20, verbose=F) |> 
+  FindClusters(resolution = .1, algotirhm = 4, verbose=F) |> RunUMAP(dims = 1:20, verbose=F)
+DimPlot(opcs, group.by = "sample") + NoAxes()
+```
+
+```{r fig.width=12, fig.height=3}
+op_plots <- list()
+op_plots[["op11"]] <- DimPlot(opcs, group.by = "sample") + ggtitle("OPCs") + NoAxes()
+op_plots[["op12"]] <- DimPlot(opcs, group.by = "genotype") + NoAxes()
+op_plots[["op13"]] <- DimPlot(opcs, group.by = "treatment") + NoAxes()
+op_plots[["op11"]] | op_plots[["op12"]] | op_plots[["op13"]]
+```
+
+### Astrocytes
+
+```{r fig.width=5, fig.height=3}
+astro <- cells.combined |> subset(cells = WhichCells(cells.combined, expression = cell_type == "Astro")) |>
+  NormalizeData(verbose=F) |> FindVariableFeatures(verbose=F) |> ScaleData(verbose=F) |> RunPCA(verbose=F) |> 
+  FindNeighbors(dims = 1:20, verbose=F) |> FindClusters(resolution = .2, algorithm = 4, verbose=F) |> RunUMAP(dims = 1:20, verbose=F)
+DimPlot(astro, group.by = "sample") + NoAxes()
+```
+
+```{r fig.width=12, fig.height=3}
+a_plots <- list()
+a_plots[["a11"]] <- DimPlot(astro, group.by = "sample") + ggtitle("Astrocytes") + NoAxes()
+a_plots[["a12"]] <- DimPlot(astro, group.by = "genotype") + NoAxes()
+a_plots[["a13"]] <- DimPlot(astro, group.by = "treatment") + NoAxes()
+a_plots[["a11"]] | a_plots[["a12"]] | a_plots[["a13"]]
+```
+
+### Microglia
+
+```{r fig.width=5, fig.height=3}
+micro <- cells.combined |> subset(cells = WhichCells(cells.combined, expression = cell_type == "Micro")) |>
+  NormalizeData(verbose=F) |> FindVariableFeatures(verbose=F) |> ScaleData(verbose=F) |> RunPCA(verbose=F) |> 
+  FindNeighbors(dims = 1:20, verbose=F) |> FindClusters(resolution = .4, algorithm = 4, verbose=F) |> RunUMAP(dims = 1:20, verbose=F)
+DimPlot(micro, group.by = "sample") + NoAxes()
+```
+
+```{r fig.width=12, fig.height=3}
+m_plots <- list()
+m_plots[["m11"]] <- DimPlot(micro, group.by = "sample") + ggtitle("Microglia") + NoAxes()
+m_plots[["m12"]] <- DimPlot(micro, group.by = "genotype") + NoAxes()
+m_plots[["m13"]] <- DimPlot(micro, group.by = "treatment") + NoAxes()
+m_plots[["m11"]] | m_plots[["m12"]] | m_plots[["m13"]]
+```
+
+### Endothelia
+
+```{r fig.width=5, fig.height=3}
+endo <- cells.combined |> subset(cells = WhichCells(cells.combined, expression = cell_type == "Endo")) |>
+  NormalizeData(verbose=F) |> FindVariableFeatures(verbose=F) |> ScaleData(verbose=F) |> RunPCA(verbose=F) |> 
+  FindNeighbors(dims = 1:20, verbose=F) |> FindClusters(resolution = 1, algorithm = 4, verbose=F) |> RunUMAP(dims = 1:20, verbose=F)
+DimPlot(endo, group.by = "sample") + NoAxes()
+```
+
+```{r fig.width=12, fig.height=3}
+e_plots <- list()
+e_plots[["e11"]] <- DimPlot(endo, group.by = "sample") + ggtitle("Endothelia") + NoAxes()
+e_plots[["e12"]] <- DimPlot(endo, group.by = "genotype") + NoAxes()
+e_plots[["e13"]] <- DimPlot(endo, group.by = "treatment") + NoAxes()
+e_plots[["e11"]] | e_plots[["e12"]] | e_plots[["e13"]]
+```
+
+## Save Results
+
+```{r}
+# mixed type in metadata may cause problem when saving to other formats, delete them
+to_del <- c(
+  grep(pattern = "DF.", colnames(cells.combined[[]]), value = T), grep(pattern = "pANN_", colnames(cells.combined[[]]), value = T),
+  "doubletfinder","doubletfinder_fixed"
+  )
+for(d in to_del){
+  cells.combined[[d]] <- NULL
+  ex_neu[[d]] <- NULL
+  inh_neu[[d]] <- NULL
+  oligo[[d]] <- NULL
+}
+```
+
+```{r}
+if(WRITE_CACHE){
+  SeuratDisk::SaveH5Seurat(cells.combined, "../data/Wei_2024/cells_use_combined.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(ex_neu, "../data/Wei_2024/ex_neu.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(inh_neu, "../data/Wei_2024/inh_neu.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(oligo, "../data/Wei_2024/oligo.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(opcs, "../data/Wei_2024/opcs.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(astro, "../data/Wei_2024/astro.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(micro, "../data/Wei_2024/micro.h5Seurat", verbose = F, overwrite = T)
+  SeuratDisk::SaveH5Seurat(endo, "../data/Wei_2024/endo.h5Seurat", verbose = F, overwrite = T)
+  saveRDS(csvd.mks.ex_neu, "../outs/de_analysis/csvd_mks_ex_neu.rds")
+  saveRDS(subtype.mks.inh_neu, "../outs/de_analysis/subtype_mks_inh_neu.rds")
+}
+```
+
+Export to anndata (.h5ad) for analysis in scanpy.
+```{r}
+# Anndata
+if(WRITE_CACHE){
+  # target_file: "../data/Wei_2024/cells_use_combined.h5ad"
+  source("../rscripts/utilities.R")
+  source("../rscripts/seurat_to_anndata_f.R")
+
+  SeuratToAnndata(
+    f_name = "cells_use_combined", 
+    f_path = "../data/Wei_2024/", 
+    out_dir = "../data/Wei_2024/",
+    embeddings = c("umap","umap.int"),
+    dr = "pca"
+  )
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
+[^1]: Traag, V. A., Waltman, L. & van Eck, N. J. From Louvain to Leiden: guaranteeing well-connected communities. Sci Rep 9, 5233 (2019).
+[^2]: Yao, Z. et al. A transcriptomic and epigenomic cell atlas of the mouse primary motor cortex. Nature 598, 103–110 (2021).
+[^3]: Zeisel, A. et al. Molecular architecture of the mouse nervous system. Cell (2018) doi:10.1101/294918.

@@ -1,0 +1,130 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Preprocessing workflow for Vanlandewijck (2018)'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'vanlandewijck_preprocessing.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+DOWNLOAD_GEO = FALSE  ## Set to TRUE on first run
+WRITE_CACHE = TRUE
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(scater)
+  library(tidyverse)
+})
+```
+
+```{r}
+set.seed(42)
+```
+
+# Pre-processing Workflow
+
+We acquire a dataset of brain vascular populations published by Vanlandewijck (2018, Nature). We will download the processed raw count matrix (GSE98816) from GEO.
+
+## Load Data
+
+```{r}
+if(DOWNLOAD_GEO){
+  suppressPackageStartupMessages({library(GEOquery)})
+  options(timeout = 6000)  ## In case of slow Internet connections
+  getGEOSuppFiles(GEO = "GSE98816", makeDirectory = T, baseDir = '../data/Vanlandewijck_2018/', filter_regex = "raw")
+}
+```
+
+```{r}
+counts <- read.table(gzfile('../data/Vanlandewijck_2018/GSE98816_Brain_samples_raw_read_counts_matrix.txt.gz'), header = T, row.names = 1)
+meta <- data.frame(
+  cell_id = colnames(counts),
+  tissue = sub("\\..*","",colnames(counts)),
+  cell_subtype = sub("_.*","",sub(".*\\.","",colnames(counts)))
+  ) |>
+  column_to_rownames("cell_id") |>
+  mutate(study = "Vanlandewijck")
+```
+
+## Standard Seurat Workflow
+
+```{r}
+vanlandewijck <- CreateSeuratObject(counts = counts, project = "GD_BBB", meta.data = meta)
+```
+
+We don't pay too much attention on the cell subtypes, so we aggregate their labels into primary vessel cell types.
+
+```{r}
+Idents(vanlandewijck) <- "cell_subtype"
+Idents(vanlandewijck) <- sub(pattern = "[0-9]", replacement = "", Idents(vanlandewijck))
+vanlandewijck[["cell_type"]] <- Idents(vanlandewijck)
+vanlandewijck[["sample"]] <- "Brain"
+```
+
+```{r}
+Seurat_Obj_Diet <- DietSeurat(vanlandewijck)
+cells.sce <- as.SingleCellExperiment(Seurat_Obj_Diet)
+
+## Cell level QC
+per.cell <- perCellQCMetrics(cells.sce, subsets = list(Mito = grep("^mt-", rownames(cells.sce)),
+                                                       Ribo = grep("\\bRp[sl]\\d+[^k]*\\b", rownames(cells.sce))))
+qc.stats <- quickPerCellQC(per.cell, percent_subsets=c("subsets_Mito_percent"))
+colSums(as.matrix(qc.stats))
+
+colData(cells.sce) <- cbind(colData(cells.sce), cbind(per.cell, qc.stats))
+cells.sce.filtered <- cells.sce[,]
+
+## Feature level QC
+keep_feature <- nexprs(cells.sce.filtered, byrow=TRUE) > 0
+## Remove mitochondrial and ribosomal genes which does not contribute to analysis (i.e. cell clustering)
+keep_feature[grep("\\bRp[sl]\\d+[^k]*\\b", rownames(cells.sce))] <- FALSE
+keep_feature[grep("mt-", rownames(cells.sce))] <- FALSE
+cells.sce.filtered <- cells.sce.filtered[keep_feature,]
+dim(cells.sce.filtered)
+
+vanlandewijck <- as.Seurat(cells.sce.filtered)
+vanlandewijck$ident <- NULL
+```
+
+```{r}
+vanlandewijck <- vanlandewijck |>
+  NormalizeData(verbose = FALSE) |>
+  FindVariableFeatures(verbose = FALSE) |>
+  ScaleData(verbose = FALSE) |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = 1:30, verbose = FALSE) |>
+  RunTSNE(dims = 1:30, verbose = FALSE)
+```
+
+```{r}
+DimPlot(vanlandewijck, group.by = "cell_type", reduction = "tsne", label = T, label.box = T) + 
+  NoAxes() +
+  ggtitle(label = "Vanlandewijck et al.: Brain Vascular")
+```
+
+## Save Results
+
+```{r}
+if(WRITE_CACHE){
+  SeuratDisk::SaveH5Seurat(object = vanlandewijck, filename = "../data/Vanlandewijck_2018/vanlandewijck.h5Seurat", overwrite = T, verbose = F)
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```

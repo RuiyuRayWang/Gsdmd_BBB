@@ -1,0 +1,390 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: "Diifferential Expression Analysis"
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'de_analysis.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+WRITE_CACHE = FALSE  ## Set to TRUE on first run
+```
+
+```{r}
+set.seed(42)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+})
+source("../rscripts/avgLogExp.R")
+```
+
+# Differential Expression Analysis
+
+## Load Data
+
+```{r}
+suppressMessages({
+  cells.combined <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/cells_use_combined.h5Seurat", verbose=F)
+})
+```
+
+### Testing Differentially Expressed Genes (DEGs)
+
+In the following sections, we will perform Differential Expression analysis by comparing the expression levels for every gene between `LPS` and `Saline` treatment across every genotype - wild type (`WT`) and Gsdmd^{-/-}^ (`GDKO`). We will test on every cell type and subtype. We will apply the `MAST` algorithm, which is a method tailored for scRNA-seq data, to test for statistical significance.
+
+```{r}
+test.use = "MAST"
+```
+
+#### Effect of LPS under both WT and GDKO background
+
+```{r}
+DefaultAssay(cells.combined) <- "RNA"
+Idents(cells.combined) <- "cell_subtype"
+```
+
+Test `WT LPS` against `WT PBS`, and `GDKO LPS` against `GDKO PBS`, using cell types as grouping factor:
+```{r}
+cell_types = as.character(unique(cells.combined$cell_type))  # all major class cell types and subtypes
+genotypes = c("WT", "GDKO")
+
+degs.cell_type.list <- sapply(
+  X = cell_types, 
+  FUN = function(x){
+    sapply(X = genotypes, FUN = function(g){
+      cells.combined |>
+        subset(subset = genotype == g) |>
+        FindMarkers(ident.1 = "LPS", group.by = "treatment", subset.ident = x, test.use = test.use, logfc.threshold = 0, min.pct = 0) |>
+        mutate(cell_type = x, delta_pct = pct.1 - pct.2) |>
+        rownames_to_column("gene")
+      },
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+    )},
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+Test `WT LPS` against `WT PBS`, and `GDKO LPS` against `GDKO PBS`, using cell subtypes as grouping factor:
+```{r}
+cell_subtypes = as.character(unique(cells.combined$cell_subtype))  # all major class cell types and subtypes
+genotypes = c("WT", "GDKO")
+
+degs.cell_subtype.list <- sapply(
+  X = cell_subtypes, 
+  FUN = function(x){
+    sapply(X = genotypes, FUN = function(g){
+      cells.combined |>
+        subset(subset = genotype == g) |>
+        FindMarkers(ident.1 = "LPS", group.by = "treatment", subset.ident = x, test.use = test.use, logfc.threshold = 0, min.pct = 0) |>
+        mutate(cell_type = x, delta_pct = pct.1 - pct.2) |>
+        rownames_to_column("gene")
+      },
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+    )},
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+Appending MOLs (MOL1 + MOL2).
+```{r}
+degs.cell_subtype.list[["MOLs"]] <-
+  list(
+    WT = cells.combined |>
+      subset(subset = genotype == "WT") |>
+      subset(subset = cell_subtype %in% c("MOL1","MOL2")) |>
+      FindMarkers(ident.1 = "LPS", group.by = "treatment", test.use = test.use, logfc.threshold = 0, min.pct = 0) |>
+      mutate(cell_type = "MOLs", delta_pct = pct.1 - pct.2) |>
+      rownames_to_column("gene"),
+    GDKO = cells.combined |>
+      subset(subset = genotype == "GDKO") |>
+      subset(subset = cell_subtype %in% c("MOL1","MOL2")) |>
+      FindMarkers(ident.1 = "LPS", group.by = "treatment", test.use = test.use, logfc.threshold = 0, min.pct = 0) |>
+      mutate(cell_type = "MOLs", delta_pct = pct.1 - pct.2) |>
+      rownames_to_column("gene")
+  )
+```
+
+
+#### Effect of GDKO in LPS group
+
+Test `WT LPS` against `GDKO LPS`, using primary cell types as grouping factor:
+```{r}
+cell_types = as.character(unique(cells.combined$cell_type))
+cells.lps <- cells.combined |> subset(subset = treatment == "LPS")
+Idents(cells.lps) <- "cell_type"
+
+degs.cell_type.lps.wt_gdko.list <- sapply(
+  X = cell_types, 
+  FUN = function(x){
+     cells.lps |>
+        FindMarkers(ident.1 = "WT", group.by = "genotype", subset.ident = x, test.use = test.use, logfc.threshold = 0, min.pct = 0) |>
+        mutate(cell_type = x, delta_pct = pct.1 - pct.2) |>
+        rownames_to_column("gene")
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+Test `WT LPS` against `GDKO LPS`, using cell subtypes as grouping factor:
+```{r}
+cell_subtypes = as.character(unique(cells.combined$cell_subtype))
+cells.lps <- cells.combined |> subset(subset = treatment == "LPS")
+Idents(cells.lps) <- "cell_subtype"
+
+degs.cell_subtype.lps.wt_gdko.list <- sapply(
+  X = cell_subtypes, 
+  FUN = function(x){
+     cells.lps |>
+        FindMarkers(ident.1 = "WT", group.by = "genotype", subset.ident = x, test.use = test.use, logfc.threshold = 0, min.pct = 0) |>
+        mutate(cell_type = x, delta_pct = pct.1 - pct.2) |>
+        rownames_to_column("gene")
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+```{r}
+degs.cell_subtype.lps.wt_gdko.list[["MOLs"]] = cells.lps |> 
+  subset(cell_subtype %in% c("MOL1","MOL2")) |> 
+  FindMarkers(ident.1 = "WT", group.by = "genotype", test.use = test.use,
+              logfc.threshold = 0, min.pct = 0) |>
+  rownames_to_column("gene")
+```
+
+#### Exploratory Analysis
+
+Aggregate info from the same cell types.
+```{r}
+degs.wider_list <- lapply(X = degs.cell_type.list, FUN = function(ct){
+  left_join(
+  x = ct[["WT"]], 
+  y = ct[["GDKO"]], 
+  by = c("gene", "cell_type"), 
+  suffix = c(".WT", ".GDKO")
+) |>
+  relocate(gene, cell_type)
+})
+```
+
+```{r}
+degs.df <- do.call(what = bind_rows, args = degs.wider_list)
+```
+
+```{r fig.width=12, fig.height=3}
+degs.df$cell_type <- factor(degs.df$cell_type, levels = c("Endo","Astro","OPCs","Oligo","Micro","Ex-Neu.","Inh-Neu."))
+degs.df |> 
+  ggplot(aes(x=avg_log2FC.WT, y = avg_log2FC.GDKO)) + 
+  geom_point() +
+  scale_x_continuous(limits = c(-8, 8)) +
+  scale_y_continuous(limits = c(-8, 8)) +
+  facet_wrap(~cell_type, nrow = 1) +
+  geom_smooth(method = "lm", color = "blue", ) +
+  theme_bw()
+```
+
+### Testing Conserved Genes Triggered by LPS, across all Cell Subtypes
+
+```{r}
+cell_subtypes = as.character(unique(cells.combined$cell_subtype))
+csvd.lps.mks.cell_subtype = sapply(
+  X = cell_subtypes,
+  FUN = function(x){
+    cells <- cells.combined |> subset(subset = cell_subtype == x)
+    Idents(cells) <- "treatment"
+    df.mks <- FindConservedMarkers(
+      object = cells,
+      ident.1 = "LPS",
+      grouping.var = "genotype"
+    ) |>
+      rownames_to_column("gene") |>
+      mutate(
+        baseline_avg_log2FC = 
+          avgLogExp(object = cells, cells = WhichCells(cells, expression = treatment == "PBS" & genotype == "GDKO"), features = gene, base = 2, pseudocount.use = 1) -
+          avgLogExp(object = cells, cells = WhichCells(cells, expression = treatment == "PBS" & genotype == "WT"), features = gene, base = 2, pseudocount.use = 1)
+        ) |>
+      mutate(
+        delta_log2FC = WT_avg_log2FC - GDKO_avg_log2FC - baseline_avg_log2FC,
+        sum_log2FC = WT_avg_log2FC + GDKO_avg_log2FC
+        )
+    return(df.mks)
+    },
+  simplify = FALSE,
+  USE.NAMES = TRUE
+)
+```
+
+```{r}
+mols <- cells.combined |>
+  subset(subset = cell_subtype %in% c("MOL1","MOL2"))
+Idents(mols) <- "treatment"
+csvd.lps.mks.cell_subtype[["MOLs"]] <-
+  mols |>
+  FindConservedMarkers(
+    ident.1 = "LPS",
+    grouping.var = "genotype"
+  ) |>
+  rownames_to_column("gene") |>
+  mutate(
+    baseline_avg_log2FC = 
+      avgLogExp(object = mols, cells = WhichCells(mols, expression = treatment == "PBS" & genotype == "GDKO"), features = gene, base = 2, pseudocount.use = 1) -
+      avgLogExp(object = mols, cells = WhichCells(mols, expression = treatment == "PBS" & genotype == "WT"), features = gene, base = 2, pseudocount.use = 1)
+    ) |>
+  mutate(
+    delta_log2FC = WT_avg_log2FC - GDKO_avg_log2FC - baseline_avg_log2FC,
+    sum_log2FC = WT_avg_log2FC + GDKO_avg_log2FC
+    )
+```
+
+
+```{r}
+cell_subtypes <- names(csvd.lps.mks.cell_subtype)
+
+signature_genes.cell_subtype.list <- sapply(
+  X = cell_subtypes,
+  FUN = function(ct){
+    x = degs.cell_subtype.lps.wt_gdko.list[[ct]] |>
+      slice_max(order_by = avg_log2FC, n = 200) |>
+      pull("gene")
+    y = degs.cell_subtype.lps.wt_gdko.list[[ct]] |>
+      slice_min(order_by = avg_log2FC, n = 200) |>
+      pull("gene")
+    
+    z = csvd.lps.mks.cell_subtype[[ct]] |>
+      dplyr::filter(abs(delta_log2FC) < .1) |>
+      dplyr::filter(sum_log2FC < 0) |>
+      slice_min(order_by = sum_log2FC, n = 200) |>
+      pull("gene")
+    w = csvd.lps.mks.cell_subtype[[ct]] |>
+      dplyr::filter(abs(delta_log2FC) < .1) |>
+      dplyr::filter(sum_log2FC > 0) |>
+      slice_max(order_by = sum_log2FC, n = 200) |>
+      pull("gene")
+
+    
+    if(length(intersect(c(x,y),c(z,w))) == 0){
+      print(paste(ct,"Ok."))
+    } else {
+      warning(paste("The x, y, z, w signature genes for",ct,"contain duplicate values."))
+    }
+    
+    return(list(x=x,y=y,z=z,w=w))
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+### Testing Conserved Cell Type and Cell Subtype Markers
+
+Primary cell classes.
+```{r}
+Idents(cells.combined) <- "cell_type"
+cell_types = as.character(unique(cells.combined$cell_type))
+csvd.celltype.mks.list <- sapply(
+  X = cell_types, 
+  FUN = function(x){
+    FindConservedMarkers(object = cells.combined, ident.1 = x, test.use = "MAST", grouping.var = "sample", only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene") |>
+      dplyr::mutate(cell_type = x)
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+Conserved markers for excitatory neuron subtypes.
+```{r}
+ex_neu <- subset(cells.combined, subset = cell_type == "Ex-Neu.")
+ex_subtypes = as.character(unique(ex_neu$cell_subtype))
+Idents(ex_neu) <- "cell_subtype"
+csvd.ex_subtype.mks.list <- sapply(
+  X = ex_subtypes, 
+  FUN = function(x){
+    FindConservedMarkers(object = ex_neu, ident.1 = x, test.use = "MAST", grouping.var = "sample", only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene") |>
+      dplyr::mutate(cell_type = x)
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+Conserved markers for inhibitory neuron subtypes.
+```{r}
+inh_neu <- subset(cells.combined, subset = cell_type == "Inh-Neu.")
+inh_subtypes = as.character(unique(inh_neu$cell_subtype))
+Idents(inh_neu) <- "cell_subtype"
+csvd.inh_subtype.mks.list <- sapply(
+  X = inh_subtypes, 
+  FUN = function(x){
+    FindConservedMarkers(object = inh_neu, ident.1 = x, test.use = "MAST", grouping.var = "sample", only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene") |>
+      dplyr::mutate(cell_type = x)
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+Conserved markers for oligodendrocyte subtypes.
+```{r}
+oligo <- subset(cells.combined, subset = cell_type == "Oligo")
+ol_subtypes = as.character(unique(oligo$cell_subtype))
+Idents(oligo) <- "cell_subtype"
+csvd.ol_subtype.mks.list <- sapply(
+  X = ol_subtypes, 
+  FUN = function(x){
+    FindConservedMarkers(object = oligo, ident.1 = x, test.use = "MAST", grouping.var = "sample", only.pos = TRUE, verbose = FALSE) |>
+      rownames_to_column("gene") |>
+      dplyr::mutate(cell_type = x)
+    },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+  )
+```
+
+## Reproducing Plots
+
+## Save Results
+
+```{r}
+if (WRITE_CACHE){
+  saveRDS(degs.cell_type.list, "../outs/de_analysis/degs_cell_type_list.rds")
+  saveRDS(degs.cell_subtype.list, "../outs/de_analysis/degs_cell_subtype_list.rds")
+  saveRDS(degs.cell_type.lps.wt_gdko.list, "../outs/de_analysis/degs_cell_type_lps_wt_gdko_list.rds")
+  saveRDS(degs.cell_subtype.lps.wt_gdko.list, "../outs/de_analysis/degs_cell_subtype_lps_wt_gdko_list.rds")
+  saveRDS(csvd.celltype.mks.list, "../outs/de_analysis/csvd_celltype_mks_list.rds")
+  saveRDS(csvd.ex_subtype.mks.list, "../outs/de_analysis/csvd_ex_subtype_mks_list.rds")
+  saveRDS(csvd.inh_subtype.mks.list, "../outs/de_analysis/csvd_inh_subtype_mks_list.rds")
+  saveRDS(csvd.ol_subtype.mks.list, "../outs/de_analysis/csvd_ol_subtype_mks_list.rds")
+  saveRDS(csvd.lps.mks.cell_subtype, "../outs/de_analysis/csvd_lps_mks_cell_subtype.rds")
+  saveRDS(signature_genes.cell_subtype.list, "../outs/de_analysis/signature_genes_cell_subtype_list.rds")
+}
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```

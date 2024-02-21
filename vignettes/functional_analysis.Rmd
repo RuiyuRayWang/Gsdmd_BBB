@@ -1,0 +1,1225 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: "Functional Analysis"
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'functional_analysis.html'))})
+---
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+set.seed(42)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(clusterProfiler)
+  library(org.Mm.eg.db)
+  library(msigdbr)
+})
+```
+
+```{r}
+if(!dir.exists("../outs/functional_analysis/classification")) {dir.create("../outs/functional_analysis/classification")}
+if(!dir.exists("../outs/functional_analysis/enrichment")) {dir.create("../outs/functional_analysis/ora")}
+if(!dir.exists("../outs/functional_analysis/gsea")) {dir.create("../outs/functional_analysis/fcs")}
+```
+
+# Functional Analysis
+
+## Load Data
+
+```{r}
+degs.cell_subtype.list <- readRDS("../outs/de_analysis/degs_cell_subtype_list.rds")
+degs.cell_subtype.lps.wt_gdko.list <- readRDS("../outs/de_analysis/degs_cell_subtype_lps_wt_gdko_list.rds")
+```
+
+```{r}
+degs.cell_type.list <- readRDS("../outs/de_analysis/degs_cell_type_list.rds")
+degs.cell_type.lps.wt_gdko.list <- readRDS("../outs/de_analysis/degs_cell_type_lps_wt_gdko_list.rds")
+```
+
+```{r}
+csvd.lps.mks.cell_subtype <- readRDS("../outs/de_analysis/csvd_lps_mks_cell_subtype.rds")
+```
+
+### 1 degs.cell_subtype.list
+
+#### 1.1 Functional Classification
+
+Setup test parameters.
+```{r}
+ABS_LFC_cutoff = 1
+P_ADJ_cutoff = 0.01
+```
+
+```{r}
+ont = c("BP", "CC", "MF")
+cell_subtypes = names(degs.cell_subtype.list)
+genotypes = c("WT", "GDKO")
+
+ggo.cell_subtype.up.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+          # Parse DEGs list
+          degs = degs.cell_subtype.list[[x]][[g]] |> dplyr::filter(avg_log2FC > ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform functional grouping
+          if (!is.null(degs_entrez)){
+            return(
+              groupGO(gene = degs_entrez,
+                      OrgDb = org.Mm.eg.db,
+                      keyType = "ENTREZID",
+                      ont = o,
+                      readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ggo.cell_subtype.down.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+          # Parse DEGs list
+          degs = degs.cell_subtype.list[[x]][[g]] |> dplyr::filter(avg_log2FC < -ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform functional grouping
+          if (!is.null(degs_entrez)){
+            return(
+              groupGO(gene = degs_entrez,
+                      OrgDb = org.Mm.eg.db,
+                      keyType = "ENTREZID",
+                      ont = o,
+                      readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Convert to dataframe for viewer's convenience.
+```{r}
+ggo.cell_subtype.up.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+            ggo.cell_subtype.up.list[[o]][[x]][[g]] |> as.data.frame()
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ggo.cell_subtype.down.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+            ggo.cell_subtype.down.list[[o]][[x]][[g]] |> as.data.frame()
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Save results.
+```{r}
+saveRDS(ggo.cell_subtype.up.list, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_up_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ggo.cell_subtype.down.list, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_down_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ggo.cell_subtype.up.dfs, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_up_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ggo.cell_subtype.down.dfs, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_down_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+```
+
+#### 1.2 Functional Enrichment - Over Representation Analysis (ORA)
+
+Setup test parameters.
+```{r}
+ABS_LFC_cutoff = 1
+P_ADJ_cutoff = 0.01
+```
+
+```{r}
+ont = c("BP", "CC", "MF")
+cell_subtypes = names(degs.cell_subtype.list)
+genotypes = c("WT", "GDKO")
+
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_subtype.list[[1]][[1]][["gene"]], 
+  column = "ENTREZID", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+ego.cell_subtype.up.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+          # Parse DEGs list
+          degs = degs.cell_subtype.list[[x]][[g]] |> dplyr::filter(avg_log2FC > ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform enrichment tests
+          if (!is.null(degs_entrez)){
+            return(
+              enrichGO(gene = degs_entrez,
+                       OrgDb = org.Mm.eg.db,
+                       keyType = "ENTREZID",
+                       universe = background,
+                       ont = o,
+                       pAdjustMethod = "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_subtype.down.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+          # Parse DEGs list
+          degs = degs.cell_subtype.list[[x]][[g]] |> dplyr::filter(avg_log2FC < -ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform enrichment tests
+          if (!is.null(degs_entrez)){
+            return(
+              enrichGO(gene = degs_entrez,
+                       OrgDb = org.Mm.eg.db,
+                       keyType = "ENTREZID",
+                       universe = background,
+                       ont = o,
+                       pAdjustMethod = "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Convert to dataframe for viewer's convenience.
+```{r}
+ego.cell_subtype.up.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+            ego.cell_subtype.up.list[[o]][[x]][[g]] |> as.data.frame()
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_subtype.down.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+            ego.cell_subtype.down.list[[o]][[x]][[g]] |> as.data.frame()
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Save Results.
+```{r}
+saveRDS(ego.cell_subtype.up.list, paste0("../outs/functional_analysis/ora/ego_cell_subtype_up_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_subtype.down.list, paste0("../outs/functional_analysis/ora/ego_cell_subtype_down_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_subtype.up.dfs, paste0("../outs/functional_analysis/ora/ego_cell_subtype_up_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_subtype.down.dfs, paste0("../outs/functional_analysis/ora/ego_cell_subtype_down_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+```
+
+### 2 degs.cell_subtype.lps.wt_gdko.list
+
+#### 2.1 Functional Classification
+
+Setup test parameters.
+```{r}
+ABS_LFC_cutoff = 1
+P_ADJ_cutoff = 0.01
+```
+
+```{r}
+ont = c("BP", "CC", "MF")
+cell_subtypes = names(degs.cell_subtype.list)
+
+ggo.cell_subtype.lps.wt_gdko.up.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        # # Show progress, for debug
+        # print(x)
+        
+        # Parse DEGs list
+        degs = degs.cell_subtype.lps.wt_gdko.list[[x]] |> dplyr::filter(avg_log2FC > ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+        degs_entrez = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = degs,
+                 column = "ENTREZID",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(degs_entrez)){
+          return(
+            groupGO(gene = degs_entrez,
+                    OrgDb = org.Mm.eg.db,
+                    keyType = "ENTREZID",
+                    ont = o,
+                    readable = TRUE)
+            )
+          } else { return(NULL) }
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ggo.cell_subtype.lps.wt_gdko.down.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        # # Show progress, for debug
+        # print(x)
+        
+        # Parse DEGs list
+        degs = degs.cell_subtype.lps.wt_gdko.list[[x]] |> dplyr::filter(avg_log2FC < -ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+        degs_entrez = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = degs,
+                 column = "ENTREZID",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(degs_entrez)){
+          return(
+            groupGO(gene = degs_entrez,
+                    OrgDb = org.Mm.eg.db,
+                    keyType = "ENTREZID",
+                    ont = o,
+                    readable = TRUE)
+            )
+          } else { return(NULL) }
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Convert to dataframe for viewer's convenience.
+```{r}
+ggo.cell_subtype.lps.wt_gdko.up.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        ggo.cell_subtype.lps.wt_gdko.up.list[[o]][[x]] |> as.data.frame()
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ggo.cell_subtype.lps.wt_gdko.down.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        ggo.cell_subtype.lps.wt_gdko.down.list[[o]][[x]] |> as.data.frame()
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Save Results.
+```{r}
+saveRDS(ggo.cell_subtype.lps.wt_gdko.up.list, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_lps_wt_gdko_up_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ggo.cell_subtype.lps.wt_gdko.down.list, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_lps_wt_gdko_down_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ggo.cell_subtype.lps.wt_gdko.up.dfs, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_lps_wt_gdko_up_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ggo.cell_subtype.lps.wt_gdko.down.dfs, paste0("../outs/functional_analysis/classification/ggo_cell_subtype_lps_wt_gdko_down_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+```
+
+#### 2.2 Functional Enrichment - Over Representation Analysis (ORA)
+
+Setup test parameters.
+```{r}
+ABS_LFC_cutoff = 1
+P_ADJ_cutoff = 0.01
+```
+
+```{r}
+ont = c("BP", "CC", "MF")
+cell_subtypes = names(degs.cell_subtype.list)  # "Ex-Neu.", "Inh-Neu.", "Oligo", "Astro", "OPCs", "Micro", "Endo"
+
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_subtype.lps.wt_gdko.list[[1]][["gene"]], 
+  column = "ENTREZID", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+ego.cell_subtype.lps.wt_gdko.up.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        # Parse DEGs list
+        degs = degs.cell_subtype.lps.wt_gdko.list[[x]] |> dplyr::filter(avg_log2FC > ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+        degs_entrez = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = degs,
+                 column = "ENTREZID",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(degs_entrez)){
+          return(
+            enrichGO(gene = degs_entrez,
+                     OrgDb = org.Mm.eg.db,
+                     keyType = "ENTREZID",
+                     universe = background,
+                     ont = o,
+                     pAdjustMethod = "BH",
+                     pvalueCutoff = 0.05,
+                     qvalueCutoff = 0.2,
+                     readable = TRUE)
+            )} else { return(NULL) }
+          },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_subtype.lps.wt_gdko.down.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        # Parse DEGs list
+        degs = degs.cell_subtype.lps.wt_gdko.list[[x]] |> dplyr::filter(avg_log2FC < -ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+        degs_entrez = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = degs,
+                 column = "ENTREZID",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(degs_entrez)){
+          return(
+            enrichGO(gene = degs_entrez,
+                     OrgDb = org.Mm.eg.db,
+                     keyType = "ENTREZID",
+                     universe = background,
+                     ont = o,
+                     pAdjustMethod = "BH",
+                     pvalueCutoff = 0.05,
+                     qvalueCutoff = 0.2,
+                     readable = TRUE)
+            )} else { return(NULL) }
+          },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Convert to dataframe for viewer's convenience.
+```{r}
+ego.cell_subtype.lps.wt_gdko.up.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        ego.cell_subtype.lps.wt_gdko.up.list[[o]][[x]] |> as.data.frame()
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_subtype.lps.wt_gdko.down.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_subtypes, 
+      FUN = function(x){
+        ego.cell_subtype.lps.wt_gdko.down.list[[o]][[x]] |> as.data.frame()
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Save results.
+```{r}
+saveRDS(ego.cell_subtype.lps.wt_gdko.up.list,
+        paste0("../outs/functional_analysis/ora/ego_cell_subtype_lps_wt_gdko_up_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_subtype.lps.wt_gdko.down.list,
+        paste0("../outs/functional_analysis/ora/ego_cell_subtype_lps_wt_gdko_down_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_subtype.lps.wt_gdko.up.dfs, 
+        paste0("../outs/functional_analysis/ora/ego_cell_subtype_lps_wt_gdko_up_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_subtype.lps.wt_gdko.down.dfs,
+        paste0("../outs/functional_analysis/ora/ego_cell_subtype_lps_wt_gdko_down_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+```
+
+### 3 degs.cell_type.list
+
+#### 3.1 Functional Enrichment - Over Representation Analysis (ORA)
+
+Setup test parameters.
+```{r}
+ABS_LFC_cutoff = 1
+P_ADJ_cutoff = 0.01
+```
+
+```{r}
+ont = c("BP", "CC", "MF")
+cell_types = names(degs.cell_type.list)
+genotypes = c("WT", "GDKO")
+
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_type.list[[1]][[1]][["gene"]], 
+  column = "ENTREZID", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+ego.cell_type.up.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+          # Parse DEGs list
+          degs = degs.cell_type.list[[x]][[g]] |> dplyr::filter(avg_log2FC > ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform enrichment tests
+          if (!is.null(degs_entrez)){
+            return(
+              enrichGO(gene = degs_entrez,
+                       OrgDb = org.Mm.eg.db,
+                       keyType = "ENTREZID",
+                       universe = background,
+                       ont = o,
+                       pAdjustMethod = "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_type.down.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+          # Parse DEGs list
+          degs = degs.cell_type.list[[x]][[g]] |> dplyr::filter(avg_log2FC < -ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform enrichment tests
+          if (!is.null(degs_entrez)){
+            return(
+              enrichGO(gene = degs_entrez,
+                       OrgDb = org.Mm.eg.db,
+                       keyType = "ENTREZID",
+                       universe = background,
+                       ont = o,
+                       pAdjustMethod = "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Convert to dataframe for viewer's convenience.
+```{r}
+ego.cell_type.up.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+            ego.cell_type.up.list[[o]][[x]][[g]] |> as.data.frame()
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_type.down.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+        sapply(X = genotypes, FUN = function(g){
+            ego.cell_type.down.list[[o]][[x]][[g]] |> as.data.frame()
+          },
+          simplify = FALSE, 
+          USE.NAMES = TRUE
+          )},
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Save Results.
+```{r}
+saveRDS(ego.cell_type.up.list, paste0("../outs/functional_analysis/ora/ego_cell_type_up_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_type.down.list, paste0("../outs/functional_analysis/ora/ego_cell_type_down_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_type.up.dfs, paste0("../outs/functional_analysis/ora/ego_cell_type_up_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_type.down.dfs, paste0("../outs/functional_analysis/ora/ego_cell_type_down_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+```
+
+#### 3.2 Functional Class Scoring (FCS) - Gene Set Enrichment Analysis (GSEA)
+
+Neuronal signatures are weak. Try to recover them with GSEA.
+```{r}
+degs.cell_type.list.entrez <- lapply(
+  X = degs.cell_type.list, 
+  FUN = function(ct){
+    lapply(
+      X = ct,
+      FUN = function(g){
+        return(
+          g |>
+            dplyr::mutate(entrez_id = mapIds(x = org.Mm.eg.db,
+                                             keys = gene,
+                                             keytype = "SYMBOL",
+                                             column = "ENTREZID",
+                                             multiVals = "first")) |>
+            na.omit()
+        )
+        })
+    })
+
+cell_type.gene.list <- lapply(
+  X = degs.cell_type.list.entrez, 
+  FUN = function(ct){
+    lapply(
+      X = ct, 
+      FUN = function(g){
+        genelist = g[["avg_log2FC"]]
+        names(genelist) = g[["entrez_id"]]
+        genelist = sort(genelist, decreasing = TRUE)
+        return(genelist)
+        })
+})
+```
+
+```{r}
+m_t2g_C5_BP <- msigdbr(species = "Mus musculus", category = "C5", subcategory = "BP") |>
+  dplyr::select(gs_name, entrez_gene)
+
+cell_type.gsea.gobp.list <- lapply(
+  X = cell_type.gene.list, 
+  FUN = function(ct){
+    lapply(X = ct, FUN = function(g){
+      gsea = GSEA(g, TERM2GENE = m_t2g_C5_BP, eps = 0)
+      gsea = setReadable(gsea, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+      return(gsea)
+    })
+})
+```
+
+```{r}
+# C2: Curated Set, Canonical Pathways
+m_t2g_C2 <- msigdbr(species = "Mus musculus", category = "C2") |>
+    dplyr::select(gs_name, entrez_gene)
+
+cell_type.gsea.C2.list <- lapply(
+  X = cell_type.gene.list, 
+  FUN = function(ct){
+    lapply(X = ct, FUN = function(g){
+      gsea = GSEA(g, TERM2GENE = m_t2g_C2, eps = 0)
+      gsea = setReadable(gsea, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+      return(gsea)
+    })
+})
+```
+
+### 4 degs.cell_type.lps.wt_gdko.list
+
+#### 4.1 Functional Enrichment
+
+Setup test parameters.
+```{r}
+ABS_LFC_cutoff = 1
+P_ADJ_cutoff = 0.01
+```
+
+```{r}
+ont = c("BP", "CC", "MF")
+cell_types = names(degs.cell_type.lps.wt_gdko.list)
+
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_type.lps.wt_gdko.list[[1]][["gene"]], 
+  column = "ENTREZID", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+ego.cell_type.lps.wt_gdko.up.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+          # Parse DEGs list
+          degs = degs.cell_type.lps.wt_gdko.list[[x]] |> dplyr::filter(avg_log2FC > ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform enrichment tests
+          if (!is.null(degs_entrez)){
+            return(
+              enrichGO(gene = degs_entrez,
+                       OrgDb = org.Mm.eg.db,
+                       keyType = "ENTREZID",
+                       universe = background,
+                       ont = o,
+                       pAdjustMethod = "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_type.lps.wt_gdko.down.list <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+          # Parse DEGs list
+          degs = degs.cell_type.lps.wt_gdko.list[[x]] |> dplyr::filter(avg_log2FC < -ABS_LFC_cutoff & p_val_adj < P_ADJ_cutoff) |> pull("gene")
+          degs_entrez = tryCatch(
+            mapIds(x = org.Mm.eg.db,
+                   keys = degs,
+                   column = "ENTREZID",
+                   keytype = "SYMBOL",
+                   multiVals = "first") |> na.omit(),
+            error = function(e){ return(NULL) }
+          )
+          
+          # Perform enrichment tests
+          if (!is.null(degs_entrez)){
+            return(
+              enrichGO(gene = degs_entrez,
+                       OrgDb = org.Mm.eg.db,
+                       keyType = "ENTREZID",
+                       universe = background,
+                       ont = o,
+                       pAdjustMethod = "BH",
+                       pvalueCutoff = 0.05,
+                       qvalueCutoff = 0.2,
+                       readable = TRUE)
+              )
+            } else { return(NULL) }
+          },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Convert to dataframe for viewer's convenience.
+```{r}
+ego.cell_type.lps.wt_gdko.up.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+            ego.cell_type.lps.wt_gdko.up.list[[o]][[x]] |> as.data.frame()
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+
+ego.cell_type.lps.wt_gdko.down.dfs <- sapply(
+  X = ont,
+  FUN = function(o){
+    sapply(
+      X = cell_types, 
+      FUN = function(x){
+            ego.cell_type.lps.wt_gdko.down.list[[o]][[x]] |> as.data.frame()
+        },
+      simplify = FALSE, 
+      USE.NAMES = TRUE
+    )},
+    simplify = FALSE, 
+    USE.NAMES = TRUE
+)
+```
+
+Save Results.
+```{r}
+saveRDS(ego.cell_type.lps.wt_gdko.up.list, paste0("../outs/functional_analysis/ora/ego_cell_type_lps_wt_gdko_up_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_type.lps.wt_gdko.down.list, paste0("../outs/functional_analysis/ora/ego_cell_type_lps_wt_gdko_down_list_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_type.lps.wt_gdko.up.dfs, paste0("../outs/functional_analysis/ora/ego_cell_type_lps_wt_gdko_up_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+saveRDS(ego.cell_type.lps.wt_gdko.down.dfs, paste0("../outs/functional_analysis/ora/ego_cell_type_lps_wt_gdko_down_dfs_LFC_",ABS_LFC_cutoff,"_PADJ_",P_ADJ_cutoff,".rds"))
+```
+
+#### 4.2 Functional Class Scoring (FCS) - Gene Set Enrichment Analysis (GSEA)
+
+```{r}
+genelist.cell_type.lps.wt_gdko <- lapply(
+  X = degs.cell_type.lps.wt_gdko.list, 
+  FUN = function(ct){
+    df = ct |>
+      dplyr::mutate(entrez_id = mapIds(x = org.Mm.eg.db,
+                                       keys = gene,
+                                       keytype = "SYMBOL",
+                                       column = "ENTREZID",
+                                       multiVals = "first")) |>
+      na.omit()
+    genelist = df[["avg_log2FC"]]
+    names(genelist) = df[["entrez_id"]]
+    genelist = sort(genelist, decreasing = TRUE)
+      return(genelist)
+})
+```
+
+```{r}
+# C5: GOBP ontology set
+m_t2g_C5_BP <- msigdbr(species = "Mus musculus", category = "C5", subcategory = "BP") |>
+  dplyr::select(gs_name, entrez_gene)
+
+cell_type.lps.wt_gdko.gsea.C5.list <- lapply(
+  X = genelist.cell_type.lps.wt_gdko, 
+  FUN = function(ct){
+    gsea = GSEA(ct, TERM2GENE = m_t2g_C5_BP, eps = 0)
+    gsea = setReadable(gsea, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+    return(gsea)
+    })
+```
+
+```{r}
+# C2: Curated Set, Canonical Pathways
+m_t2g_C2 <- msigdbr(species = "Mus musculus", category = "C2") |>
+    dplyr::select(gs_name, entrez_gene)
+
+cell_type.lps.wt_gdko.gsea.C2.list <- lapply(
+  X = genelist.cell_type.lps.wt_gdko, 
+  FUN = function(ct){
+    gsea = GSEA(ct, TERM2GENE = m_t2g_C2, eps = 0)
+    gsea = setReadable(gsea, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+    return(gsea)
+    })
+```
+
+Save results.
+```{r}
+saveRDS(cell_type.lps.wt_gdko.gsea.C5.list,
+        paste0("../outs/functional_analysis/fcs/cell_type_lps_wt_gdko_gsea_C5_list.rds"))
+saveRDS(cell_type.lps.wt_gdko.gsea.C2.list,
+        paste0("../outs/functional_analysis/fcs/cell_type_lps_wt_gdko_gsea_C2_list.rds"))
+```
+
+### 5 csvd.lps.mks.cell_subtype
+
+#### 5.1 Functional Enrichment
+
+```{r}
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_subtype.lps.wt_gdko.list[[1]][["gene"]], 
+  column = "ENTREZID", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+ego.bp.signature_genes.cell_subtype.list <- lapply(
+  X = signature_genes.cell_subtype.list,
+  FUN = function(ct){
+    lapply(
+      X = ct,
+      FUN = function(g){
+        g_entrez = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = g,
+                 column = "ENTREZID",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(g_entrez)){
+          return(
+            enrichGO(gene = g_entrez,
+                     OrgDb = org.Mm.eg.db,
+                     keyType = "ENTREZID",
+                     universe = background,
+                     ont = "BP",
+                     pAdjustMethod = "BH",
+                     pvalueCutoff = 0.1,
+                     # qvalueCutoff = 0.2,
+                     readable = TRUE)
+            )} else { return(NULL) }
+      }
+    )
+  }
+)
+```
+
+```{r}
+ego.bp.signature_genes.cell_subtype.dfs <- lapply(
+  X = ego.bp.signature_genes.cell_subtype.list,
+  FUN = function(ct){
+    lapply(
+      X = ct,
+      FUN = function(ego){
+        ego |> as.data.frame()
+      }
+    )
+  }
+)
+```
+
+```{r}
+saveRDS(ego.bp.signature_genes.cell_subtype.list, "../outs/functional_analysis/ora/ego_bp_signature_genes_cell_subtype_list.rds")
+saveRDS(ego.bp.signature_genes.cell_subtype.dfs, "../outs/functional_analysis/ora/ego_bp_signature_genes_cell_subtype_dfs.rds")
+```
+
+#### 5.2 KEGG Pathway ORA
+
+```{r}
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_subtype.lps.wt_gdko.list[[1]][["gene"]], 
+  column = "ENTREZID", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+kk.entrez.signature_genes.cell_subtype.list <- lapply(
+  X = signature_genes.cell_subtype.list,
+  FUN = function(ct){
+    lapply(
+      X = ct,
+      FUN = function(g){
+        g_entrez = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = g,
+                 column = "ENTREZID",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(g_entrez)){
+          return(
+            enrichKEGG(
+              gene = g_entrez,
+              organism = "mmu",
+              keyType = "kegg",
+              pvalueCutoff = 0.05,
+              pAdjustMethod = "BH",
+              universe = background
+              )
+            )} else { return(NULL) }
+      }
+    )
+  }
+)
+```
+
+```{r}
+kk.entrez.signature_genes.cell_subtype.dfs <- lapply(
+  X = kk.entrez.signature_genes.cell_subtype.list,
+  FUN = function(ct){
+    lapply(
+      X = ct,
+      FUN = function(ego){
+        ego |> as.data.frame()
+      }
+    )
+  }
+)
+```
+
+```{r}
+saveRDS(kk.entrez.signature_genes.cell_subtype.list, "../outs/functional_analysis/ora/kk_entrez_signature_genes_cell_subtype_list.rds")
+```
+
+
+
+```{r}
+background = mapIds(
+  x = org.Mm.eg.db, 
+  keys = degs.cell_subtype.lps.wt_gdko.list[[1]][["gene"]], 
+  column = "UNIPROT", 
+  keytype = "SYMBOL", 
+  multiVals = "first"
+) %>% na.omit()
+
+kk.uniprot.signature_genes.cell_subtype.list <- lapply(
+  X = signature_genes.cell_subtype.list,
+  FUN = function(ct){
+    lapply(
+      X = ct,
+      FUN = function(g){
+        g_uniprot = tryCatch(
+          mapIds(x = org.Mm.eg.db,
+                 keys = g,
+                 column = "UNIPROT",
+                 keytype = "SYMBOL",
+                 multiVals = "first") |> na.omit(),
+          error = function(e){ return(NULL) }
+          )
+        
+        # Perform enrichment tests
+        if (!is.null(g_uniprot)){
+          return(
+            enrichKEGG(
+              gene = g_uniprot,
+              organism = "mmu",
+              keyType = "uniprot",
+              pvalueCutoff = 0.05,
+              pAdjustMethod = "BH",
+              universe = background
+              )
+            )} else { return(NULL) }
+      }
+    )
+  }
+)
+```

@@ -1,0 +1,201 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Perturbation Status: Cell Type Prioritization (Augur)'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'prioritization.html'))})
+---
+
+# Introduction
+
+Our experimental setup is based on a two-factor factorial design. To investigate the perturbation strength of LPS challenges across different cell types under wild type or Gsdmd^-/-^ genotypes, we resort to two methods:
+
+  1. Independent non-linear dimension reduction on each cell types using `umap`[^1]^,^[^2]
+  2. Cell type prioritization and differential prioritization using `Augur`[^3]
+
+Here, we quantitatively investigate the transcriptional states of each cell type (and their subtypes, if available) within wild-type or Gsdmd^-/-^ mice under the perturbation of LPS, using Augur.
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+WRITE_CACHE = TRUE  ## Set to TRUE on first run
+```
+
+```{r}
+set.seed(42)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(Augur)
+})
+```
+
+## Load Data
+
+```{r warning=FALSE}
+suppressMessages({
+  cells.combined <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/cells_use_combined.h5Seurat", verbose = F)
+})
+```
+
+# Cell Prioritization
+
+## 1 Prioritize LPS perturbation by "cell_type"
+
+### 1.1 Calculate AUCs for each genotype
+
+```{r}
+genotypes = c("WT", "GDKO")
+augur_celltype <- sapply(X = genotypes, FUN = function(g){
+  # Subset Seurat object
+  cells_genotype <- subset(cells.combined, subset = genotype == g)
+  
+  # Set labels
+  cells_genotype$label = cells_genotype$treatment
+  
+  # Run Augur
+  DefaultAssay(cells_genotype) = "RNA"
+  augur = calculate_auc(cells_genotype, cell_type_col = "cell_type", n_threads = 32)
+  
+  return(augur)
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+### 1.2 Differential Prioritization
+
+#### Generating Null distrubution
+```{r}
+genotypes = c("WT", "GDKO")
+permuted_celltype <- sapply(X = genotypes, FUN = function(g){
+  # Subset Seurat object
+  cells_pbs <- subset(cells.combined, subset = treatment == "PBS" | genotype == g)
+  
+  # Set labels
+  cells_pbs$label = cells_pbs$treatment
+  
+  # Run Augur in permutation mode
+  augur = calculate_auc(
+    cells_pbs, cell_type_col = "cell_type", n_threads = 32, augur_mode = "permute"
+  )
+  
+  return(augur)
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+#### Comparing observed AUC with permuted results
+```{r}
+diff_prior_celltype_pvals = calculate_differential_prioritization(
+  augur1 = augur_celltype[["WT"]],
+  augur2 = augur_celltype[["GDKO"]],
+  permuted1 = permuted_celltype[["WT"]],
+  permuted2 = permuted_celltype[["GDKO"]]
+)
+```
+
+## 2 Prioritize LPS perturbation by "cell_subtype"
+
+### 2.1 Calculate AUCs for each genotype
+
+```{r}
+# cells.use <- subset(cells.combined, subset = cell_subtype != "Inh-Chodl")  ## Eliminate subtype with small population size
+# cells.use$cell_subtype <- droplevels(cells.use$cell_subtype)
+genotypes = c("WT", "GDKO")
+augur_cellsubtype <- sapply(X = genotypes, FUN = function(g){
+  # Subset Seurat object
+  cells_genotype <- subset(cells.combined, subset = genotype == g)
+  
+  # Set labels
+  cells_genotype$label = cells_genotype$treatment
+  
+  # Run Augur
+  DefaultAssay(cells_genotype) = "RNA"
+  augur = calculate_auc(cells_genotype, cell_type_col = "cell_subtype", n_threads = 32)
+  
+  return(augur)
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+### 2.2 Differential Prioritization
+
+#### Generating Null distrubution
+```{r}
+genotypes = c("WT", "GDKO")
+permuted_cellsubtype <- sapply(X = genotypes, FUN = function(g){
+  # Subset Seurat object
+  cells_null <- subset(cells.combined, subset = treatment == "PBS" | genotype == g)
+  
+  # Set labels
+  cells_null$label = cells_null$treatment
+  
+  # Run Augur in permutation mode
+  augur = calculate_auc(
+    cells_null, cell_type_col = "cell_subtype", n_threads = 32, augur_mode = "permute"
+  )
+  
+  return(augur)
+  },
+  simplify = FALSE, 
+  USE.NAMES = TRUE
+)
+```
+
+#### Comparing observed AUC with permuted results
+```{r}
+diff_prior_cellsubtype_pvals = calculate_differential_prioritization(
+  augur1 = augur_cellsubtype[["WT"]],
+  augur2 = augur_cellsubtype[["GDKO"]],
+  permuted1 = permuted_cellsubtype[["WT"]],
+  permuted2 = permuted_cellsubtype[["GDKO"]]
+)
+```
+
+## Prioritization of cell subtypes affected by Gsdmd-deficiency under the LPS background
+
+```{r}
+cells.lps <- subset(cells.combined, subset = treatment == "LPS")
+
+# Set labels
+cells.lps$label = cells.lps$genotype
+
+# Run Augur
+DefaultAssay(cells.lps) = "RNA"
+augur_cellsubtype_lps_wt_gdko = calculate_auc(cells.lps, cell_type_col = "cell_subtype", n_threads = 32)
+```
+
+## Save Results
+
+```{r}
+saveRDS(augur_celltype, "../outs/Augur/augur_celltype.rds")
+saveRDS(permuted_celltype, "../outs/Augur/permuted_celltype.rds")
+saveRDS(augur_cellsubtype, "../outs/Augur/augur_cellsubtype.rds")
+saveRDS(permuted_cellsubtype, "../outs/Augur/permuted_cellsubtype.rds")
+saveRDS(diff_prior_celltype_pvals, "../outs/Augur/diff_prior_celltype_pvals.rds")
+saveRDS(diff_prior_cellsubtype_pvals, "../outs/Augur/diff_prior_cellsubtype_pvals.rds")
+saveRDS(augur_cellsubtype_lps_wt_gdko, "../outs/Augur/augur_cellsubtype_lps_wt_gdko.rds")
+```
+
+
+[^1]: McInnes, L., Healy, J. & Melville, J. UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction. arXiv:1802.03426 [cs, stat] (2020).
+[^2]: Becht, E. et al. Dimensionality reduction for visualizing single-cell data using UMAP. Nat Biotechnol 37, 38–44 (2019).
+[^3]: Skinnider, M. A. et al. Cell type prioritization in single-cell data. Nat Biotechnol (2020) doi:10.1038/s41587-020-0605-1.

@@ -1,0 +1,278 @@
+---
+title: "Wei et al.: Gsdmd BBB"
+subtitle: 'Perturbation Analysis: Independent Non-linear Dimension Reduction (UMAP)'
+author: "Ruiyu Ray Wang"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(input_file, encoding){
+  out_dir <- '../docs';
+  rmarkdown::render(input_file,
+    encoding=encoding,
+    output_file=file.path(dirname(input_file), out_dir, 'indep_umap.html'))})
+---
+
+# Introduction
+
+Our experimental setup is based on a two-factor factorial design. To investigate the perturbation LPS imposed on different cell types, in both wild type and Gsdmd^-/-^ genotypes, we resort to two methods:
+
+  1. Independent non-linear dimension reduction on each cell types using `umap`[^1]^,^[^2]
+  2. Cell type prioritization and differential prioritization using `Augur`[^3]
+
+Here, we dedicate a single vignette to describe the transcriptional states of each cell type (and their subtypes, if available) in wild-type and Gsdmd^-/-^ mice under the perturbation of LPS, using the non-linear dimension reduction technique UMAP (method 1).
+
+# Initialization
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+set.seed(42)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(tidydr)
+})
+```
+
+## Load Data
+
+```{r warning=FALSE}
+suppressMessages({
+  ex_neu <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/ex_neu.h5Seurat", verbose = F)
+  inh_neu <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/inh_neu.h5Seurat", verbose = F)
+  astro <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/astro.h5Seurat", verbose = F)
+  oligo <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/oligo.h5Seurat", verbose = F)
+  opcs <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/opcs.h5Seurat", verbose = F)
+  micro <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/micro.h5Seurat", verbose = F)
+  endo <- SeuratDisk::LoadH5Seurat("../data/Wei_2024/endo.h5Seurat", verbose = F)
+})
+```
+
+# Non-linear Dimensional Reduction
+
+UMAP provides an intuitive way to visualize the transcriptional states of cell types under each experimental condition. Nontheless, this strategy is not based on rigorous statistics and thus can only be used in an explorative manner. It is also quite verbose to iterate over each cell type. Later we will use `Augur` to provide a quantitative evaluation of cell type perturbation.
+
+### Endothelial Cells
+
+Under LPS induced systemic inflammation, Endothelial Cells in both wild type (WT) and Gsdmd^-/-^ (GDKO) mice showed robust transcriptional changes. This is evidenced by the large segregation between PBS and LPS treatment groups in the UMAP embedding.  
+Notably, cells from wild type and Gsdmd^-/-^ mice in the LPS group form segregated sub-clusters, suggesting that a difference in transcriptional states may be present and could be driven by the underlying genotypes. In contrast, in the PBS treatment group, cells from both genotypes are intermingled together, indicating that: 1) the batch effect between these two experiments is small, and 2) the transcriptomes of Endothelia in PBS group are very similar. 
+
+```{r}
+endo$treatment <- factor(endo$treatment, levels = c("PBS", "LPS"))
+endo$genotype <- factor(endo$genotype, levels = c("WT", "GDKO"))
+endo$sample <- factor(endo$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+```
+
+```{r fig.width=12, fig.height=3}
+DimPlot(endo, group.by = "seurat_clusters", label = T) + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(endo, group.by = "sample") + NoAxes() + theme(legend.position = c(.6,.24), legend.text = element_text(size = 10), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(endo, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)]) + NoAxes() + theme(legend.position = c(.65,.16), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(endo, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)]) + NoAxes() + theme(legend.position = c(.70,.16), panel.background = element_rect(size = 1, colour = "black"))
+```
+
+### Microglia
+
+UMAP shows that Microglia also responded strongly to LPS, in both wild type and Gsdmd^-/-^ mice. Notably, we observe an evident segregation between Microglia from mice with different genotypes ("WT LPS" and "GDKO LPS", clusters 2 and 3). This indicates that Gsdmd-deficiency strongly affected Microglia's response to LPS. Differential expression and functional analysis are required to draw further conclusions on the functional impact of the perturbation.
+
+```{r}
+micro$treatment <- factor(micro$treatment, levels = c("PBS", "LPS"))
+micro$genotype <- factor(micro$genotype, levels = c("WT", "GDKO"))
+micro$sample <- factor(micro$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+```
+
+```{r fig.width=12, fig.height=3}
+DimPlot(micro, group.by = "seurat_clusters", label = T) + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(micro, group.by = "sample") + NoAxes() + theme(legend.position = c(.6,.8), legend.text = element_text(size = 10), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(micro, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)]) + NoAxes() + theme(legend.position = c(.65,.88), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(micro, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)]) + NoAxes() + theme(legend.position = c(.70,.88), panel.background = element_rect(size = 1, colour = "black"))
+```
+
+### Excitatory Neurons (Slc17a7+)
+
+The transcriptional landscape of Excitatory Neurons revealed a remarkably complex scenario. To begin with, we performed semi-supervised clustering and unambiguously classified the Excitatory Neurons into 8 subtypes, denoted hereafter by their layer positioning and projection type: L4/5 IT (1), L6 CT (2), L2/3 IT (3), L5/6 NP1 (4), L6 IT (5), L5 IT (6), L5/6 NP2 (7), and L6b (8). We showcase this in the integrated UMAP space.
+
+```{r}
+ex_neu$treatment <- factor(ex_neu$treatment, levels = c("PBS", "LPS"))
+ex_neu$genotype <- factor(ex_neu$genotype, levels = c("WT", "GDKO"))
+ex_neu$sample <- factor(ex_neu$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+## Manually fix cluster identities
+# Idents(ex_neu) <- "seurat_clusters"
+# ex_neu <- RenameIdents(ex_neu, `7` = 2, `8` = 7)
+# ex_neu$seurat_clusters <- Idents(ex_neu)
+# ex_neu$seurat_clusters <- factor(ex_neu$seurat_clusters, levels = 1:7)
+```
+
+```{r fig.width=12, fig.height=6}
+# setting reduction = "umap.int" to visualize in integrated space
+(DimPlot(ex_neu, group.by = "integrated_snn_res.0.15", label = T, label.box = T, reduction = "umap.int") + NoAxes() + theme_dr() + 
+   theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+   FeaturePlot(ex_neu, features = "Slc30a3", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+   FeaturePlot(ex_neu, features = "Otof", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+   FeaturePlot(ex_neu, features = "Rorb", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) |  
+FeaturePlot(ex_neu, features = "Rspo1", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))) / 
+   (FeaturePlot(ex_neu, features = "Fezf2", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+   FeaturePlot(ex_neu, features = "Sulf1", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+   FeaturePlot(ex_neu, features = "Sla2", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+   FeaturePlot(ex_neu, features = "Foxp2", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+   FeaturePlot(ex_neu, features = "Nxph4", reduction = "umap.int") + NoAxes() +
+   theme(legend.position = c(.85,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)))
+```
+
+Applying UMAP in the original RNA expression (non-integrated) space, we see moderate cluster segregations in some neuron subtypes, which were likely induced by LPS perturbation. However, note L5/6 NP1, the population did not responded to LPS at all! **Therefore, neurons show heterogeneous responses to LPS with respect to their cellular identities.**
+
+Moreover, of those neuronal subtypes who did respond to LPS, none of them showed differential response with regard to Gsdmd-deficiency (i.e. GDKO LPS vs. WT LPS perfectly aligned).
+
+```{r fig.width=12, fig.height=3}
+# setting reduction = "umap" to visualize in un-integrated space
+DimPlot(ex_neu, group.by = "cell_subtype", label = T, reduction = "umap") + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(ex_neu, group.by = "sample", reduction = "umap") + NoAxes() + theme(legend.position = c(.72,.89), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+  DimPlot(ex_neu, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)], reduction = "umap") + NoAxes() + theme(legend.position = c(.65,.90), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(ex_neu, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)], reduction = "umap") + NoAxes() + theme(legend.position = c(.70,.90), panel.background = element_rect(size = 1, colour = "black"))
+```
+
+### Inhibitory Neurons (Gad2+)
+
+In stark contrast, the Inhibitory Neuron population showed the exact opposite of what we observed in Excitatory Neurons:  
+**All Inhibitory Neurons showed nearly no response to LPS!**
+
+First, we showcase the Inhibitory Neuron can be classified into 4 major subtypes in our dataset: Vip, Lhx6, Lamp5, Chodl. Although the Lhx6 subtype can be sub-divided into finer subtypes (i.e. Sst, Pvalb, etc.), we 
+
+```{r}
+inh_neu$treatment <- factor(inh_neu$treatment, levels = c("PBS", "LPS"))
+inh_neu$genotype <- factor(inh_neu$genotype, levels = c("WT", "GDKO"))
+inh_neu$sample <- factor(inh_neu$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+```
+
+```{r fig.width=12, fig.height=3}
+FeaturePlot(inh_neu, features = "Vip", reduction = "umap") + NoAxes() + theme_dr() +
+  theme(legend.position = c(.1,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7), panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  FeaturePlot(inh_neu, features = "Lhx6", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) | 
+  FeaturePlot(inh_neu, features = "Lamp5", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) |
+  FeaturePlot(inh_neu, features = "Chodl", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))
+```
+
+Next, we show that, by directly applying UMAP on the original gene expression space, but not the integrated space, the transcriptomes of Inhibitory Neurons can be readily embedded in a "well-mixed" fashion, but not clusters segregated by treatments or genotypes. **This suggests that the transcriptional states of Inhibitory Neurons are entirely insensitive to inflammatory challenges**.
+
+```{r fig.width=12, fig.height=3}
+## NOTE: setting reduction = "umap"
+DimPlot(inh_neu, group.by = "cell_subtype", label = T, reduction = "umap") + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(inh_neu, group.by = "sample", reduction = "umap") + NoAxes() + theme(legend.position = c(.02,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.1, 'cm'), legend.key.height = unit(.2, 'cm'), legend.key.width = unit(.2, 'cm'), legend.text = element_text(size=7)) | 
+  DimPlot(inh_neu, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)], reduction = "umap") + NoAxes() + theme(legend.position = c(.02,.15), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.8, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.5, 'cm'), legend.text = element_text(size=9)) | 
+  DimPlot(inh_neu, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)], reduction = "umap") + NoAxes() + theme(legend.position = c(.02,.15), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.8, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.5, 'cm'), legend.text = element_text(size=9))
+```
+
+Together, the analyses on Neurons imply that **there are heterogeneous response to LPS challenge with respect to neuronal subtypes**, i.e. different neuronal subtypes responded to LPS with different magnitude.
+Taking the genotypic information into consideration, we further note that **no neuronal populations displayed differential response to Gsdmd-deficiency**.
+
+### Astrocytes
+
+For Astrocytes, UMAP embedding also segregates LPS from PBS treatment groups. We also observe a clear displacement between clusters representing "WT LPS" and "GDKO LPS", indicating that there is a differential response to LPS in Gsdmd-deficient mice as compared to wild type mice.
+
+We notice that between "WT PBS" and "GDKO PBS" astrocytes, there is a tendency in cells to form sub-clusters. One possible interpretation of this result is that the astrocytes' transcriptome may inherently bear some difference between wild type and Gsdmd^-/-^ mice under physiological context. We choose not to delve further into this subject as it is unrelated to our study. More experiment need to be conducted to substantiate the finding.
+
+```{r}
+astro$treatment <- factor(astro$treatment, levels = c("PBS", "LPS"))
+astro$genotype <- factor(astro$genotype, levels = c("WT", "GDKO"))
+astro$sample <- factor(astro$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+```
+
+```{r fig.width=12, fig.height=3}
+DimPlot(astro, group.by = "seurat_clusters", label = T) + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(astro, group.by = "sample") + NoAxes() + theme(legend.position = c(.04,.18), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.1, 'cm'), legend.key.height = unit(.2, 'cm'), legend.key.width = unit(.2, 'cm'), legend.text = element_text(size=7))  | 
+  DimPlot(astro, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)]) + NoAxes() + theme(legend.position = c(.04,.16), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(astro, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)]) + NoAxes() + theme(legend.position = c(.04,.16), panel.background = element_rect(size = 1, colour = "black"))
+```
+
+### Oligodendrocyte Precursor Cells (OPCs)
+
+In a similar vein, the transcriptome landscape of OPCs follow the same paradigm as that of Endothelial Cells, and a similar conclusion can be made:  
+both wild type and Gsdmd^-/-^ astrocytes responded to LPS challenge; wild type and Gsdmd^-/-^ astrocytes' responded differently.
+
+```{r}
+opcs$treatment <- factor(opcs$treatment, levels = c("PBS", "LPS"))
+opcs$genotype <- factor(opcs$genotype, levels = c("WT", "GDKO"))
+opcs$sample <- factor(opcs$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+```
+
+```{r fig.width=12, fig.height=3}
+DimPlot(opcs, group.by = "seurat_clusters", label = T) + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(opcs, group.by = "sample") + NoAxes() + theme(legend.position = c(.04,.22), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.2, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))  | 
+  DimPlot(opcs, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)]) + NoAxes() + theme(legend.position = c(.04,.16), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(opcs, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)]) + NoAxes() + theme(legend.position = c(.04,.16), panel.background = element_rect(size = 1, colour = "black"))
+```
+
+### Oligodendrocytes
+
+Following the nomenclature in <http://www.mousebrain.org/>[^5], Oligodendrocytes can be potentially divided into Commited Oligodendrocyte Precursors (COPs), Newly Formed Oligodendrocytes (NFOLs), Myelin Forming Oligodendrocytes (MFOLs), and Mature Oligodendrocytes (MOLs). We are able to unambiguously identify most of these cell subtypes with respect to their canonical markers. Additionally, two MOLs subtypes (denoted hereafter by MOL1, MOL2) can be distinguished by their corresponding markers (MOL1:"Opalin" and MOL2:"Dock5").
+
+Here we show the UMAP embeddings of these cell subtypes, in both the original RNA space (Left 2 columns) and the integrated space (Right 2 columns). We also show the expression of the subtype marker genes by overlaying them on the UMAP embedding. We can see that the marker gene expressions follow a trajectory pattern that recapitulates the development of Oligodendrocytes' lineage, this indicates that our identification of cell subtypes is accurate.
+
+```{r}
+oligo$cell_subtype <- factor(oligo$cell_subtype, levels = c("COPs", "NFOLs", "MOL1", "MOL2"))
+oligo$treatment <- factor(oligo$treatment, levels = c("PBS", "LPS"))
+oligo$genotype <- factor(oligo$genotype, levels = c("WT", "GDKO"))
+oligo$sample <- factor(oligo$sample, levels = c("WT PBS", "WT LPS", "GDKO PBS", "GDKO LPS"))
+# DefaultAssay(oligo) <- "RNA"
+# oligo <- ScaleData(object = oligo, features = c(VariableFeatures(oligo),"Dock5"))
+```
+
+```{r fig.width=12, fig.height=9}
+((DimPlot(oligo, group.by = "cell_subtype", reduction = "umap.int", label = T) + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(oligo, group.by = "sample", reduction = "umap.int") + NoAxes() + theme(legend.position = c(.04,.22), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.2, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))) /
+  (FeaturePlot(oligo, features = "Tnr", reduction = "umap.int") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) |
+  FeaturePlot(oligo, features = "Tmem2", reduction = "umap.int") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))) /
+  (FeaturePlot(oligo, features = "Opalin", reduction = "umap.int") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) |
+  FeaturePlot(oligo, features = "Dock5", reduction = "umap.int") + NoAxes() +
+  theme(legend.position = c(.05,.2), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)))) |
+  ((DimPlot(oligo, group.by = "cell_subtype", reduction = "umap", label = T) + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = "none", panel.grid = element_blank(), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(oligo, group.by = "sample", reduction = "umap") + NoAxes() + theme(legend.position = c(.04,.85), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.2, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))) /
+  (FeaturePlot(oligo, features = "Tnr", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.8), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) |
+  FeaturePlot(oligo, features = "Tmem2", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.8), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))) /
+  (FeaturePlot(oligo, features = "Opalin", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.8), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7)) |
+  FeaturePlot(oligo, features = "Dock5", reduction = "umap") + NoAxes() +
+  theme(legend.position = c(.05,.8), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.3, 'cm'), legend.key.height = unit(.3, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))))
+```
+
+Focusing on the RNA expression (non-integrated) space, we see that the transcriptomes of COPs and MOLs responded to LPS challenges.  
+There also appear to be a differential response to LPS between wild type and Gsdmd^-/-^ in MOLs. However, the differential response cannot be clearly observed in NFOLs, which may be due to under-represented sample size.  
+While we're also interested in the differential response in COPs, unfortunately we did not capture enough COP cells in the "WT LPS" group to come up with a valid conclusion.
+
+```{r fig.width=12, fig.height=3}
+DimPlot(oligo, group.by = "cell_subtype") + NoAxes() + theme_dr() + theme(panel.background = element_rect(size = 1, colour = "black"), legend.position = c(.14,.82), panel.grid = element_blank(), legend.key.size = unit(.2, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7), plot.title = element_text(family = "Arial", face = "bold", hjust = .5, size = 15)) | 
+  DimPlot(oligo, group.by = "sample") + NoAxes() + theme(legend.position = c(.04,.82), panel.background = element_rect(size = 1, colour = "black"), legend.key.size = unit(.2, 'cm'), legend.key.height = unit(.4, 'cm'), legend.key.width = unit(.4, 'cm'), legend.text = element_text(size=7))  | 
+  DimPlot(oligo, group.by = "genotype", cols = RColorBrewer::brewer.pal(12,"Paired")[c(2,8)]) + NoAxes() + theme(legend.position = c(.03,.88), panel.background = element_rect(size = 1, colour = "black")) | 
+  DimPlot(oligo, group.by = "treatment", cols = RColorBrewer::brewer.pal(12,"Paired")[c(4,6)]) + NoAxes() + theme(legend.position = c(.04,.88), panel.background = element_rect(size = 1, colour = "black"))
+```
+
+# Concluding Remarks
+
+Taken together, the scRNA-seq dataset presented here revealed a remarkably complex transcriptomic landscape of the CNS's neuronal, glial and vascular cell types under physiological condition and in response to LPS induced systemic inflammation.
+
+While different cell types responded to LPS challenge differently, we 
+
+[^1]: McInnes, L., Healy, J. & Melville, J. UMAP: Uniform Manifold Approximation and Projection for Dimension Reduction. arXiv:1802.03426 [cs, stat] (2020).
+[^2]: Becht, E. et al. Dimensionality reduction for visualizing single-cell data using UMAP. Nat Biotechnol 37, 38–44 (2019).
+[^3]: Skinnider, M. A. et al. Cell type prioritization in single-cell data. Nat Biotechnol (2020) doi:10.1038/s41587-020-0605-1.
+[^4]: Callaway, E. M. et al. A multimodal cell census and atlas of the mammalian primary motor cortex. Nature 598, 86–102 (2021).
+[^5]: Zeisel, A. et al. Molecular architecture of the mouse nervous system. Cell (2018) doi:10.1101/294918.
