@@ -42,8 +42,8 @@ gene = "Casp4"
 p2 <- VlnPlot(endo_wt,
               features = gene,
               cols = brewer.pal(12,"Paired")[c(8,10)],
-              pt.size = 1.5) +
-  ylim(c(-0.01,3.2)) +
+              pt.size = 1.5, add.noise = FALSE) +
+  ylim(c(0,3.2)) +
   scale_x_discrete(labels = c("","")) +
   geom_boxplot(width = .1, alpha = .3, color = "white") +
   stat_compare_means(method = "wilcox", method.args = list(alternative = "two.sided"), 
@@ -62,8 +62,8 @@ gene = "Cd14"
 p3 <- VlnPlot(endo_wt,
               features = gene,
               cols = brewer.pal(12,"Paired")[c(8,10)],
-              pt.size = 1.5) +
-  ylim(c(-0.01,3.2)) +
+              pt.size = 1.5, add.noise = FALSE) +
+  ylim(c(0,3.2)) +
   geom_boxplot(width = .1, alpha = .3, color = "white") +
   stat_compare_means(method = "wilcox", method.args = list(alternative = "two.sided"), 
                      comparisons = list(c("LPS","PBS")), label = "p.signif", label.y = 2.5, bracket.size = 1, size = 10) +

@@ -308,7 +308,7 @@ feature = "Casp4"
 logfc <- (avgLogExp(duan.endo, feature = feature, cells = WhichCells(duan.endo, idents = "LPS")) - 
   avgLogExp(duan.endo, feature = feature, cells = WhichCells(duan.endo, idents = "Saline")))/log(log_base)
 
-?desc_statby(endo_vplot_df, x = "treat", y = feature, fill = "treat", palette = cols[c(7,10)],
+p <- ggviolin(endo_vplot_df, x = "treat", y = feature, fill = "treat", palette = cols[c(7,10)],
          add = c("jitter","boxplot"), add.params = list(fill = "white", width = 0.1, alpha = 0.3),
          width = 0.6, size = 1.2) +
   stat_compare_means(method = "wilcox", method.args = list(alternative = "two.sided"), comparisons = list(c("LPS","Saline")), 
